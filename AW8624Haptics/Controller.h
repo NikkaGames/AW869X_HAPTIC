@@ -13,7 +13,8 @@ AW8624Stop(
 );
 NTSTATUS
 AW8624VibrateUntilStopped(
-	IN PDEVICE_CONTEXT pDevice
+	IN PDEVICE_CONTEXT pDevice,
+	IN ULONG Intensity
 );
 
 NTSTATUS

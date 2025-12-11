@@ -34,7 +34,7 @@ AW8624HapticsToggleVibrationMotor(
 	Trace(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC! Entry");
 #endif
 
-	UNREFERENCED_PARAMETER(hwnIntensity);
+	//UNREFERENCED_PARAMETER(hwnIntensity);
 
 	switch (hwnState) {
 	case HWN_OFF:
@@ -44,7 +44,7 @@ AW8624HapticsToggleVibrationMotor(
 	}
 	case HWN_ON:
 	{
-		return AW8624VibrateUntilStopped(devContext);
+		return AW8624VibrateUntilStopped(devContext, *hwnIntensity);
 		break;
 	}
 	default:

@@ -255,13 +255,23 @@ AW8624Start(
 
 NTSTATUS
 AW8624VibrateUntilStopped(
-	PDEVICE_CONTEXT pDevice
+	PDEVICE_CONTEXT pDevice,
+	ULONG Intensity
 )
 {
 	NTSTATUS Status = STATUS_SUCCESS;
 
+	Intensity = Intensity * 0x9B / 100;
+	if (Intensity > 0x9B)
+		Intensity = 0x9B;
+
 	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_SYSCTRL, AW8624_BIT_SYSCTRL_PLAY_MODE_MASK, AW8624_BIT_SYSCTRL_PLAY_MODE_CONT);
 	Status = AW8624Activate(pDevice);
+
+	if (!NT_SUCCESS(Status))
+	{
+		return Status;
+	}
 	
 	// 0x754 is retrieved from the following formula: 0x3B9ACA00 / 0x802 / 0x104,
 	// where 0x802 and 0x104 are from DTS (vib_f0_pre and vib_f0_coeff respectively)
@@ -294,8 +304,7 @@ AW8624VibrateUntilStopped(
 
 	AW8624WriteRegWithCheck(pDevice, AW8624_REG_TIME_NZC, 0x23);
 
-	// from DTS (vib_cont_drv_lev)
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_DRV_LVL, 0x6B);
+	AW8624WriteRegWithCheck(pDevice, AW8624_REG_DRV_LVL, (UINT16)Intensity);
 
 	// from DTS (vib_cont_drv_lvl_ov)
 	AW8624WriteRegWithCheck(pDevice, AW8624_REG_DRV_LVL_OV, 0x9B);
