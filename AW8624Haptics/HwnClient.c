@@ -24,6 +24,17 @@ Environment:
 #include "hwnclient.tmh"
 #endif
 
+static VOID
+AW8624HapticsSleepMs(
+	ULONG Milliseconds
+)
+{
+	LARGE_INTEGER interval = {};
+
+	interval.QuadPart = -((LONGLONG)Milliseconds * 10 * 1000);
+	KeDelayExecutionThread(KernelMode, FALSE, &interval);
+}
+
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text (PAGE, AW8624HapticsInitializeDevice)
 #pragma alloc_text (PAGE, AW8624HapticsUnInitializeDevice)
@@ -325,10 +336,16 @@ AW8624HapticsStopDevice(
 		WdfTimerStop(devContext->BlinkTimer, FALSE);
 	}
 
+	status = AW8624VibrateUntilStopped(devContext, 50);
+	if (NT_SUCCESS(status))
+	{
+		AW8624HapticsSleepMs(100);
+	}
+
 	status = AW8624Stop(devContext);
 
 #ifdef DEBUG
-	Trace(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC!: status=%!STATUS!", status);
+	Trace(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC!: pulseMs=%lu intensity=%lu status=%!STATUS!", 100UL, 50UL, status);
 #endif
 
 	return status;
