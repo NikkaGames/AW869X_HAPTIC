@@ -119,6 +119,17 @@ static UCHAR AwScaleU8(UCHAR BaseValue, ULONG Percent)
     return (UCHAR)Scaled;
 }
 
+static UCHAR AwScaleNonZeroU8(UCHAR BaseValue, ULONG Percent)
+{
+    UCHAR Scaled = AwScaleU8(BaseValue, Percent);
+
+    if (Scaled == 0) {
+        Scaled = 1;
+    }
+
+    return Scaled;
+}
+
 static VOID AwLoadNx729jLeftSettings(PDEVICE_CONTEXT DevContext)
 {
     RtlZeroMemory(&DevContext->Settings, sizeof(DevContext->Settings));
@@ -556,9 +567,18 @@ static NTSTATUS Aw8692xPlayContinuous(PDEVICE_CONTEXT DevContext, ULONG Intensit
     NTSTATUS Status;
     UCHAR Gain = AwScaleU8(AW_GAIN_MAX, Intensity);
     UCHAR Drv1 = AwScaleU8(DevContext->Settings.ContDrv1Lvl, Intensity);
-    UCHAR Drv2 = DevContext->Settings.ContDrv2Lvl;
+    UCHAR Drv2 = AwScaleNonZeroU8(DevContext->Settings.ContDrv2Lvl, Intensity);
+    UCHAR BstVol = AwScaleNonZeroU8(DevContext->Settings.BstVolDefault, Intensity);
     UCHAR Drv2Time = 0xFF;
 
+#ifdef DEBUG
+    Trace(TRACE_LEVEL_INFORMATION, TRACE_HAPTICS,
+        "%!FUNC!: intensity=%lu gain=0x%02X drv1=0x%02X drv2=0x%02X bst=0x%02X",
+        Intensity, Gain, Drv1, Drv2, BstVol);
+#endif
+
+    Status = Aw8692xSetBstVol(DevContext, BstVol);
+    if (!NT_SUCCESS(Status)) return Status;
     Status = Aw8692xSetGain(DevContext, Gain);
     if (!NT_SUCCESS(Status)) return Status;
     Status = AwWriteBits(DevContext, AW8692X_REG_PLAYCFG3,
@@ -592,9 +612,19 @@ static NTSTATUS Aw8671xPlayContinuous(PDEVICE_CONTEXT DevContext, ULONG Intensit
     NTSTATUS Status;
     UCHAR Gain = AwScaleU8(AW_GAIN_MAX, Intensity);
     UCHAR Drv1 = AwScaleU8(DevContext->Settings.ContDrv1Lvl, Intensity);
+    UCHAR Drv2 = AwScaleNonZeroU8(DevContext->Settings.ContDrv2Lvl, Intensity);
+    UCHAR BstVol = AwScaleNonZeroU8(DevContext->Settings.BstVolDefault, Intensity);
     UCHAR Combined = (UCHAR)((DevContext->Settings.TrackEnable ? 0x80 : 0x00) | (Drv1 & 0x7F));
     UCHAR Drv2Time = 0xFF;
 
+#ifdef DEBUG
+    Trace(TRACE_LEVEL_INFORMATION, TRACE_HAPTICS,
+        "%!FUNC!: intensity=%lu gain=0x%02X drv1=0x%02X drv2=0x%02X bst=0x%02X",
+        Intensity, Gain, Drv1, Drv2, BstVol);
+#endif
+
+    Status = Aw8671xSetBstVol(DevContext, BstVol);
+    if (!NT_SUCCESS(Status)) return Status;
     Status = Aw8671xSetGain(DevContext, Gain);
     if (!NT_SUCCESS(Status)) return Status;
     Status = AwWriteBits(DevContext, AW8671X_REG_PLAYCFG3,
@@ -611,7 +641,7 @@ static NTSTATUS Aw8671xPlayContinuous(PDEVICE_CONTEXT DevContext, ULONG Intensit
     if (!NT_SUCCESS(Status)) return Status;
     Status = AwWriteByte(DevContext, AW8671X_REG_CONTCFG6, Combined);
     if (!NT_SUCCESS(Status)) return Status;
-    Status = AwWriteByte(DevContext, AW8671X_REG_CONTCFG7, DevContext->Settings.ContDrv2Lvl);
+    Status = AwWriteByte(DevContext, AW8671X_REG_CONTCFG7, Drv2);
     if (!NT_SUCCESS(Status)) return Status;
     Status = AwWriteByte(DevContext, AW8671X_REG_CONTCFG9, Drv2Time);
     if (!NT_SUCCESS(Status)) return Status;
@@ -623,9 +653,19 @@ static NTSTATUS Aw869xxPlayContinuous(PDEVICE_CONTEXT DevContext, ULONG Intensit
     NTSTATUS Status;
     UCHAR Gain = AwScaleU8(AW_GAIN_MAX, Intensity);
     UCHAR Drv1 = AwScaleU8(DevContext->Settings.ContDrv1Lvl, Intensity);
+    UCHAR Drv2 = AwScaleNonZeroU8(DevContext->Settings.ContDrv2Lvl, Intensity);
+    UCHAR BstVol = AwScaleNonZeroU8(DevContext->Settings.BstVolDefault, Intensity);
     UCHAR Combined = (UCHAR)((DevContext->Settings.TrackEnable ? 0x80 : 0x00) | (Drv1 & 0x7F));
     UCHAR Drv2Time = 0xFF;
 
+#ifdef DEBUG
+    Trace(TRACE_LEVEL_INFORMATION, TRACE_HAPTICS,
+        "%!FUNC!: intensity=%lu gain=0x%02X drv1=0x%02X drv2=0x%02X bst=0x%02X",
+        Intensity, Gain, Drv1, Drv2, BstVol);
+#endif
+
+    Status = Aw869xxSetBstVol(DevContext, BstVol);
+    if (!NT_SUCCESS(Status)) return Status;
     Status = Aw869xxSetGain(DevContext, Gain);
     if (!NT_SUCCESS(Status)) return Status;
     Status = AwWriteBits(DevContext, AW869XX_REG_PLAYCFG3,
@@ -639,7 +679,7 @@ static NTSTATUS Aw869xxPlayContinuous(PDEVICE_CONTEXT DevContext, ULONG Intensit
     if (!NT_SUCCESS(Status)) return Status;
     Status = AwWriteByte(DevContext, AW869XX_REG_CONTCFG6, Combined);
     if (!NT_SUCCESS(Status)) return Status;
-    Status = AwWriteByte(DevContext, AW869XX_REG_CONTCFG7, DevContext->Settings.ContDrv2Lvl);
+    Status = AwWriteByte(DevContext, AW869XX_REG_CONTCFG7, Drv2);
     if (!NT_SUCCESS(Status)) return Status;
     Status = AwWriteByte(DevContext, AW869XX_REG_CONTCFG9, Drv2Time);
     if (!NT_SUCCESS(Status)) return Status;
@@ -650,6 +690,7 @@ static NTSTATUS Aw869xPlayContinuous(PDEVICE_CONTEXT DevContext, ULONG Intensity
 {
     NTSTATUS Status;
     UCHAR Gain = AwScaleU8(AW_GAIN_MAX, Intensity);
+    UCHAR BstVol = AwScaleNonZeroU8(DevContext->Settings.MaxBstVol, Intensity);
     UCHAR DrvLevel[2];
     UCHAR Td[2];
     UCHAR Zc[2];
@@ -662,6 +703,14 @@ static NTSTATUS Aw869xPlayContinuous(PDEVICE_CONTEXT DevContext, ULONG Intensity
     Zc[0] = (UCHAR)((DevContext->Settings.ContZcThr >> 8) & 0xFF);
     Zc[1] = (UCHAR)(DevContext->Settings.ContZcThr & 0xFF);
 
+#ifdef DEBUG
+    Trace(TRACE_LEVEL_INFORMATION, TRACE_HAPTICS,
+        "%!FUNC!: intensity=%lu gain=0x%02X drv1=0x%02X drv2=0x%02X bst=0x%02X",
+        Intensity, Gain, DrvLevel[0], DrvLevel[1], BstVol);
+#endif
+
+    Status = Aw869xSetBstVol(DevContext, BstVol);
+    if (!NT_SUCCESS(Status)) return Status;
     Status = Aw869xSetGain(DevContext, Gain);
     if (!NT_SUCCESS(Status)) return Status;
     Status = AwWriteBits(DevContext, AW869X_REG_SYSCTRL,
@@ -775,11 +824,12 @@ AW8624Start(
         }
     }
 
-    Status = AW8624Stop(DevContext);
+    Status = AW8624VibrateUntilStopped(DevContext, 5);
 
 #ifdef DEBUG
     Trace(TRACE_LEVEL_INFORMATION, TRACE_HAPTICS,
-        "%!FUNC!: prepare-only family=%lu chipId=0x%04X status=%!STATUS!",
+        "%!FUNC!: start-intensity=%lu family=%lu chipId=0x%04X status=%!STATUS!",
+        5UL,
         (ULONG)DevContext->Family,
         DevContext->ChipId,
         Status);
