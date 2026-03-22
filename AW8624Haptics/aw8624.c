@@ -1,24 +1,21 @@
 /*++
-	Copyright (c) Microsoft Corporation. All Rights Reserved.
-	Copyright (c) Bingxing Wang. All Rights Reserved.
-	Copyright (c) LumiaWoA authors. All Rights Reserved.
-	Copyright (c) DuoWoA authors. All Rights Reserved.
-	Copyright (c) Aistop. All Rights Reserved.
+    Copyright (c) Microsoft Corporation. All Rights Reserved.
+    Copyright (c) DuoWoA authors. All Rights Reserved.
 
-	SPDX-License-Identifier: BSD-3-Clause
+    SPDX-License-Identifier: BSD-3-Clause
 
-	Module Name:
+    Module Name:
 
-		aw8624.c
+        aw8624.c
 
-	Abstract:
+    Abstract:
 
-		The core haptics driver, responsible for 
-		communicating with the haptics controller.
+        Generic Awinic high-voltage haptics core used by the Windows HWNCLX
+        port. The source file name is kept for project compatibility.
 
-	Environment:
+    Environment:
 
-		Kernel mode
+        Kernel Mode
 
 --*/
 
@@ -30,390 +27,742 @@
 #include "aw8624.tmh"
 #endif
 
-#define AW8624ReadRegWithCheck(Context, Address, Data, Length)	\
-	Status = AW8624SpbRead(Context, Address, Data, Length);		\
-	if (!NT_SUCCESS(Status))									\
-	{															\
-		return Status;											\
-	}
+#define AW_UNUSED(x) (void)(x)
 
-#define AW8624WriteRegWithCheck(Context, Address, Data)			\
-	Status = AW8624SpbWrite(Context, Address, Data);			\
-	if (!NT_SUCCESS(Status))									\
-	{															\
-		return Status;											\
-	}
-
-#define AW8624WriteBitsWithCheck(Context, Address, Mask, Data)	\
-	Status = AW8624WriteBits(Context, Address, Mask, Data);		\
-	if (!NT_SUCCESS(Status))									\
-	{															\
-		return Status;											\
-	}
-
-NTSTATUS
-AW8624SpbRead(
-	PDEVICE_CONTEXT pDevice,
-	UCHAR Address,
-	PUINT16 Data,
-	ULONG Length
-)
+static NTSTATUS AwReadBytes(PDEVICE_CONTEXT DevContext, UCHAR Address, PUCHAR Data, ULONG Length)
 {
-	NTSTATUS Status = STATUS_SUCCESS;
-
-	Status = SpbReadDataSynchronously(&pDevice->I2CContext, Address, (PVOID)Data, Length);
-
+    NTSTATUS Status = SpbReadDataSynchronously(&DevContext->I2CContext, Address, Data, Length);
 #ifdef DEBUG
-	if (!NT_SUCCESS(Status))
-	{
-		Trace(
-			TRACE_LEVEL_ERROR,
-			TRACE_SPB,
-			"Error when reading data from the SPB device - 0x%08lX",
-			Status);
-	}
+    if (!NT_SUCCESS(Status)) {
+        Trace(TRACE_LEVEL_ERROR, TRACE_SPB, "%!FUNC!: read addr=0x%02X len=%lu status=%!STATUS!", Address, Length, Status);
+    }
 #endif
-
-	return Status;
+    return Status;
 }
 
-NTSTATUS
-AW8624SpbWrite(
-	PDEVICE_CONTEXT pDevice,
-	UCHAR Address,
-	UINT16 Data
-)
+static NTSTATUS AwReadByte(PDEVICE_CONTEXT DevContext, UCHAR Address, PUCHAR Data)
 {
-	NTSTATUS Status = STATUS_SUCCESS;
-
-	Status = SpbWriteDataSynchronously(&pDevice->I2CContext, Address, (PVOID)&Data, sizeof(Data));
-
-#ifdef DEBUG
-	if (!NT_SUCCESS(Status))
-	{
-		Trace(
-			TRACE_LEVEL_ERROR,
-			TRACE_SPB,
-			"Error when writing data to the SPB device - 0x%08lX",
-			Status);
-	}
-#endif
-
-	return Status;
+    return AwReadBytes(DevContext, Address, Data, 1);
 }
 
-NTSTATUS
-AW8624WriteBits(
-	PDEVICE_CONTEXT pDevice,
-	UCHAR Address,
-	INT32 Mask,
-	UINT8 Value
-)
+static NTSTATUS AwWriteBytes(PDEVICE_CONTEXT DevContext, UCHAR Address, const UCHAR* Data, ULONG Length)
 {
-	UINT16 RegData = 0;
-	NTSTATUS Status = STATUS_SUCCESS;
-
-	AW8624ReadRegWithCheck(pDevice, Address, &RegData, sizeof(RegData));
-	RegData &= Mask;
-	RegData |= Value;
-	AW8624WriteRegWithCheck(pDevice, Address, RegData);
-
-	return Status;
+    NTSTATUS Status = SpbWriteDataSynchronously(&DevContext->I2CContext, Address, (PVOID)Data, Length);
+#ifdef DEBUG
+    if (!NT_SUCCESS(Status)) {
+        Trace(TRACE_LEVEL_ERROR, TRACE_SPB, "%!FUNC!: write addr=0x%02X len=%lu status=%!STATUS!", Address, Length, Status);
+    }
+#endif
+    return Status;
 }
 
-NTSTATUS
-AW8624Standby(
-	PDEVICE_CONTEXT pDevice
-)
+static NTSTATUS AwWriteByte(PDEVICE_CONTEXT DevContext, UCHAR Address, UCHAR Data)
 {
-	NTSTATUS Status = STATUS_SUCCESS;
-
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_SYSINTM, AW8624_BIT_SYSINTM_UVLO_MASK, AW8624_BIT_SYSINTM_UVLO_OFF);
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_SYSCTRL, AW8624_BIT_SYSCTRL_WORK_MODE_MASK, AW8624_BIT_SYSCTRL_STANDBY);
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_DBGCTRL, AW8624_BIT_DBGCTRL_INTN_TRG_SEL_MASK, AW8624_BIT_DBGCTRL_TRG_SEL_ENABLE);
-
-#ifdef DEBUG
-	if (!NT_SUCCESS(Status))
-	{
-		Trace(
-			TRACE_LEVEL_ERROR,
-			TRACE_SPB,
-			"Error when putting AW8624 to standby - 0x%08lX",
-			Status);
-	}
-#endif
-
-	return Status;
+    return AwWriteBytes(DevContext, Address, &Data, 1);
 }
 
-NTSTATUS
-AW8624Activate(
-	PDEVICE_CONTEXT pDevice
-)
+static NTSTATUS AwWriteBits(PDEVICE_CONTEXT DevContext, UCHAR Address, UCHAR Mask, UCHAR Value)
 {
-	NTSTATUS Status = STATUS_SUCCESS;
-	UINT16 RegData = 0;
+    NTSTATUS Status;
+    UCHAR RegValue = 0;
 
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_SYSCTRL, AW8624_BIT_SYSCTRL_WORK_MODE_MASK, AW8624_BIT_SYSCTRL_ACTIVE);
-	AW8624ReadRegWithCheck(pDevice, AW8624_REG_SYSINT, &RegData, sizeof(RegData));
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_SYSINTM, AW8624_BIT_SYSINTM_UVLO_MASK, AW8624_BIT_SYSINTM_UVLO_EN);
+    Status = AwReadByte(DevContext, Address, &RegValue);
+    if (!NT_SUCCESS(Status)) {
+        return Status;
+    }
 
-#ifdef DEBUG
-	if (!NT_SUCCESS(Status))
-	{
-		Trace(
-			TRACE_LEVEL_ERROR,
-			TRACE_SPB,
-			"Error when trying to activate AW8624 - 0x%08lX",
-			Status);
-	}
-#endif
-
-	return Status;
+    RegValue &= Mask;
+    RegValue |= Value;
+    return AwWriteByte(DevContext, Address, RegValue);
 }
 
-NTSTATUS
-AW8624RamMode(
-	PDEVICE_CONTEXT pDevice
-)
+static VOID AwSleepUs(ULONG Microseconds)
 {
-	NTSTATUS Status = STATUS_SUCCESS;
+    KeStallExecutionProcessor(Microseconds);
+}
 
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_SYSCTRL, AW8624_BIT_SYSCTRL_PLAY_MODE_MASK, AW8624_BIT_SYSCTRL_PLAY_MODE_RAM);
+static UCHAR AwScaleU8(UCHAR BaseValue, ULONG Percent)
+{
+    ULONG Scaled;
 
-	Status = AW8624Activate(pDevice);
+    if (Percent == 0) {
+        return 0;
+    }
+    if (Percent > 100) {
+        Percent = 100;
+    }
 
+    Scaled = ((ULONG)BaseValue * Percent) / 100;
+    if (Scaled == 0) {
+        Scaled = 1;
+    }
+    if (Scaled > 0xFF) {
+        Scaled = 0xFF;
+    }
+    return (UCHAR)Scaled;
+}
+
+static VOID AwLoadNx729jLeftSettings(PDEVICE_CONTEXT DevContext)
+{
+    RtlZeroMemory(&DevContext->Settings, sizeof(DevContext->Settings));
+
+    DevContext->Settings.Mode = 0x05;
+    DevContext->Settings.F0Pre = 0x6A4;
+    DevContext->Settings.F0CaliPercent = 0x07;
+    DevContext->Settings.TrackEnable = TRUE;
+
+    switch (DevContext->Family) {
+    case AwHapticFamily8692x:
+        DevContext->Settings.BstVolDefault = 0x50;
+        DevContext->Settings.D2sGain = 0x04;
+        DevContext->Settings.ContBrkGain = 0x08;
+        DevContext->Settings.ContBstBrkGain = 0x05;
+        DevContext->Settings.ContBemfSet = 0x02;
+        DevContext->Settings.ContTset = 0x06;
+        DevContext->Settings.BrkBstMd = 0x00;
+        DevContext->Settings.ContTrackMargin = 0x0C;
+        DevContext->Settings.ContBrkTime = 0x00;
+        DevContext->Settings.ContWaitNum = 0x06;
+        DevContext->Settings.ContDrvWidth = 0x6A;
+        DevContext->Settings.ContDrv2Time = 0x06;
+        DevContext->Settings.ContDrv1Time = 0x04;
+        DevContext->Settings.ContDrv2Lvl = 0x50;
+        DevContext->Settings.ContDrv1Lvl = 0x7F;
+        DevContext->Settings.MaxBstVol = 0x7F;
+        break;
+
+    case AwHapticFamily8671x:
+        DevContext->Settings.BstVolDefault = 0x04;
+        DevContext->Settings.D2sGain = 0x04;
+        DevContext->Settings.ContTrackMargin = 0x12;
+        DevContext->Settings.ContDrv2Time = 0x14;
+        DevContext->Settings.ContDrv1Time = 0x04;
+        DevContext->Settings.ContBrkGain = 0x08;
+        DevContext->Settings.ContBstBrkGain = 0x05;
+        DevContext->Settings.ContWaitNum = 0x06;
+        DevContext->Settings.ContDrvWidth = 0x71;
+        DevContext->Settings.ContBemfSet = 0x02;
+        DevContext->Settings.ContTset = 0x06;
+        DevContext->Settings.ContBrkTime = 0x08;
+        DevContext->Settings.ContDrv2Lvl = 0x28;
+        DevContext->Settings.ContDrv1Lvl = 0x7F;
+        DevContext->Settings.BrkBstMd = 0x00;
+        DevContext->Settings.MaxBstVol = 0x0F;
+        break;
+
+    case AwHapticFamily869xx:
+        DevContext->Settings.BstVolDefault = 0x20;
+        DevContext->Settings.D2sGain = 0x04;
+        DevContext->Settings.ContTrackMargin = 0x12;
+        DevContext->Settings.ContDrv2Time = 0x14;
+        DevContext->Settings.ContDrv1Time = 0x04;
+        DevContext->Settings.ContBrkGain = 0x08;
+        DevContext->Settings.ContBstBrkGain = 0x05;
+        DevContext->Settings.ContWaitNum = 0x06;
+        DevContext->Settings.ContDrvWidth = 0x6A;
+        DevContext->Settings.ContBemfSet = 0x02;
+        DevContext->Settings.ContTset = 0x06;
+        DevContext->Settings.ContBrkTime = 0x08;
+        DevContext->Settings.ContDrv2Lvl = 0x36;
+        DevContext->Settings.ContDrv1Lvl = 0x7F;
+        DevContext->Settings.BrkBstMd = 0x00;
+        DevContext->Settings.MaxBstVol = 0x3F;
+        break;
+
+    case AwHapticFamily869x:
+        DevContext->Settings.Tset = 0x12;
+        DevContext->Settings.ContTd = 0x009A;
+        DevContext->Settings.ContZcThr = 0x0FF1;
+        DevContext->Settings.ContNumBrk = 0x03;
+        DevContext->Settings.ContDrvLvl = 0x35;
+        DevContext->Settings.ContDrvLvlOv = 0x7D;
+        DevContext->Settings.MaxBstVol = 0x1F;
+        DevContext->Settings.RSpare = 0x68;
+        DevContext->Settings.BstDbg[0] = 0x30;
+        DevContext->Settings.BstDbg[1] = 0xEB;
+        DevContext->Settings.BstDbg[2] = 0xD4;
+        DevContext->Settings.BemfConfig[0] = 0x10;
+        DevContext->Settings.BemfConfig[1] = 0x08;
+        DevContext->Settings.BemfConfig[2] = 0x03;
+        DevContext->Settings.BemfConfig[3] = 0xF8;
+        break;
+
+    default:
+        break;
+    }
+}
+
+static NTSTATUS AwReadChipId(PDEVICE_CONTEXT DevContext)
+{
+    NTSTATUS Status;
+    UCHAR Value8 = 0;
+    UCHAR Value16[2] = { 0 };
+    USHORT ChipId16;
+
+    DevContext->Family = AwHapticFamilyUnknown;
+    DevContext->ChipId = 0;
+
+    Status = AwReadByte(DevContext, AW_REG_CHIPID, &Value8);
+    if (NT_SUCCESS(Status)) {
+        switch (Value8) {
+        case AW8695_CHIPID:
+        case AW8697_CHIPID:
+            DevContext->ChipId = Value8;
+            DevContext->Family = AwHapticFamily869x;
+            break;
+        case AW86905_CHIPID:
+        case AW86907_CHIPID:
+        case AW86915_CHIPID:
+        case AW86917_CHIPID:
+            DevContext->ChipId = Value8;
+            DevContext->Family = AwHapticFamily869xx;
+            break;
+        default:
+            break;
+        }
+    }
+
+    if (DevContext->Family != AwHapticFamilyUnknown) {
+        return STATUS_SUCCESS;
+    }
+
+    Status = AwReadBytes(DevContext, AW_REG_CHIPIDH, Value16, sizeof(Value16));
+    if (!NT_SUCCESS(Status)) {
+        return Status;
+    }
+
+    ChipId16 = ((USHORT)Value16[0] << 8) | Value16[1];
+    switch (ChipId16) {
+    case AW86715_CHIPID:
+    case AW86716_CHIPID:
+    case AW86717_CHIPID:
+    case AW86718_CHIPID:
+        DevContext->ChipId = ChipId16;
+        DevContext->Family = AwHapticFamily8671x;
+        return STATUS_SUCCESS;
+
+    case AW86925_CHIPID:
+    case AW86926_CHIPID:
+    case AW86927_CHIPID:
+    case AW86928_CHIPID:
+        DevContext->ChipId = ChipId16;
+        DevContext->Family = AwHapticFamily8692x;
+        return STATUS_SUCCESS;
+
+    default:
 #ifdef DEBUG
-	if (!NT_SUCCESS(Status))
-	{
-		Trace(
-			TRACE_LEVEL_ERROR,
-			TRACE_SPB,
-			"Error when trying to switch AW8624 to RAM mode - 0x%08lX",
-			Status);
-	}
+        Trace(TRACE_LEVEL_ERROR, TRACE_DRIVER, "%!FUNC!: unsupported chip id 0x%04X", ChipId16);
 #endif
+        return STATUS_NOT_SUPPORTED;
+    }
+}
 
-	return Status;
+static NTSTATUS AwWaitStandbyCommon(PDEVICE_CONTEXT DevContext, UCHAR RegGlbState)
+{
+    NTSTATUS Status;
+    UCHAR RegValue = 0;
+    ULONG Count;
+
+    for (Count = 0; Count < AW_STANDBY_RETRIES; ++Count) {
+        Status = AwReadByte(DevContext, RegGlbState, &RegValue);
+        if (!NT_SUCCESS(Status)) {
+            return Status;
+        }
+        if ((RegValue & 0x0F) == 0x00) {
+            return STATUS_SUCCESS;
+        }
+        AwSleepUs(2500);
+    }
+
+    return STATUS_IO_TIMEOUT;
+}
+
+static NTSTATUS Aw8692xSetGain(PDEVICE_CONTEXT DevContext, UCHAR Gain)
+{
+    return AwWriteByte(DevContext, AW8692X_REG_PLAYCFG2, Gain);
+}
+
+static NTSTATUS Aw8671xSetGain(PDEVICE_CONTEXT DevContext, UCHAR Gain)
+{
+    return AwWriteByte(DevContext, AW8671X_REG_PLAYCFG2, Gain);
+}
+
+static NTSTATUS Aw869xxSetGain(PDEVICE_CONTEXT DevContext, UCHAR Gain)
+{
+    return AwWriteByte(DevContext, AW869XX_REG_PLAYCFG2, Gain);
+}
+
+static NTSTATUS Aw869xSetGain(PDEVICE_CONTEXT DevContext, UCHAR Gain)
+{
+    return AwWriteByte(DevContext, AW869X_REG_DATDBG, Gain);
+}
+
+static NTSTATUS Aw8692xSetBstVol(PDEVICE_CONTEXT DevContext, UCHAR BstVol)
+{
+    if (BstVol & AW8692X_BIT_PLAYCFG1_BIT8) {
+        BstVol = AW8692X_BIT_PLAYCFG1_BST_VOUT_MAX;
+    }
+    if (BstVol < AW8692X_BIT_PLAYCFG1_BST_VOUT_6V) {
+        BstVol = AW8692X_BIT_PLAYCFG1_BST_VOUT_6V;
+    }
+    return AwWriteBits(DevContext, AW8692X_REG_PLAYCFG1,
+        (UCHAR)AW8692X_BIT_PLAYCFG1_BST_VOUT_VREFSET_MASK, BstVol);
+}
+
+static NTSTATUS Aw8671xSetBstVol(PDEVICE_CONTEXT DevContext, UCHAR BstVol)
+{
+    if (BstVol & 0xF0) {
+        BstVol = 0x0F;
+    }
+    return AwWriteBits(DevContext, AW8671X_REG_PLAYCFG1,
+        (UCHAR)AW8671X_BIT_PLAYCFG1_CP_CODE_MASK, BstVol);
+}
+
+static NTSTATUS Aw869xxSetBstVol(PDEVICE_CONTEXT DevContext, UCHAR BstVol)
+{
+    if (BstVol & 0xC0) {
+        BstVol = 0x3F;
+    }
+    return AwWriteBits(DevContext, AW869XX_REG_PLAYCFG1,
+        (UCHAR)AW869XX_BIT_PLAYCFG1_BST_VOUT_RDA_MASK, BstVol);
+}
+
+static NTSTATUS Aw869xSetBstVol(PDEVICE_CONTEXT DevContext, UCHAR BstVol)
+{
+    if (BstVol & 0xE0) {
+        BstVol = 0x1F;
+    }
+    return AwWriteBits(DevContext, AW869X_REG_BSTDBG4,
+        (UCHAR)AW869X_BIT_BSTDBG4_BSTVOL_MASK, (UCHAR)(BstVol << 1));
+}
+
+static NTSTATUS Aw8692xMiscInit(PDEVICE_CONTEXT DevContext)
+{
+    NTSTATUS Status;
+    const AW_HAPTIC_SETTINGS* S = &DevContext->Settings;
+
+    Status = Aw8692xSetBstVol(DevContext, S->BstVolDefault);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8692X_REG_CONTCFG1,
+        (UCHAR)AW8692X_BIT_CONTCFG1_BRK_BST_MD_MASK, (UCHAR)(S->BrkBstMd << 6));
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8692X_REG_CONTCFG5,
+        0x00,
+        (UCHAR)((S->ContBstBrkGain << 4) | S->ContBrkGain));
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8692X_REG_CONTCFG13,
+        0x00,
+        (UCHAR)((S->ContTset << 4) | S->ContBemfSet));
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteByte(DevContext, AW8692X_REG_CONTCFG10, S->ContBrkTime);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8692X_REG_DETCFG2,
+        (UCHAR)AW8692X_BIT_DETCFG2_D2S_GAIN_MASK, S->D2sGain);
+    return Status;
+}
+
+static NTSTATUS Aw8671xMiscInit(PDEVICE_CONTEXT DevContext)
+{
+    NTSTATUS Status;
+    const AW_HAPTIC_SETTINGS* S = &DevContext->Settings;
+
+    Status = Aw8671xSetBstVol(DevContext, S->BstVolDefault);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8671X_REG_DETCFG3,
+        (UCHAR)AW8671X_BIT_DETCFG3_D2S_GAIN_MASK, S->D2sGain);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteByte(DevContext, AW8671X_REG_CONTCFG10, S->ContBrkTime);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8671X_REG_CONTCFG5,
+        (UCHAR)AW8671X_BIT_CONTCFG5_BRK_GAIN_MASK, S->ContBrkGain);
+    return Status;
+}
+
+static NTSTATUS Aw869xxMiscInit(PDEVICE_CONTEXT DevContext)
+{
+    NTSTATUS Status;
+
+    Status = Aw869xxSetBstVol(DevContext, DevContext->Settings.BstVolDefault);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteByte(DevContext, AW869XX_REG_CONTCFG10, DevContext->Settings.ContBrkTime);
+    return Status;
+}
+
+static NTSTATUS Aw869xSetPref0(PDEVICE_CONTEXT DevContext)
+{
+    UCHAR Buffer[2];
+    Buffer[0] = (UCHAR)((DevContext->Settings.F0Pre >> 8) & 0xFF);
+    Buffer[1] = (UCHAR)(DevContext->Settings.F0Pre & 0xFF);
+    return AwWriteBytes(DevContext, AW869X_REG_F_PRE_H, Buffer, sizeof(Buffer));
+}
+
+static NTSTATUS Aw869xMiscInit(PDEVICE_CONTEXT DevContext)
+{
+    NTSTATUS Status;
+    const AW_HAPTIC_SETTINGS* S = &DevContext->Settings;
+
+    Status = AwWriteBytes(DevContext, AW869X_REG_BSTDBG1, S->BstDbg, sizeof(S->BstDbg));
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteByte(DevContext, AW869X_REG_TSET, S->Tset);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteByte(DevContext, AW869X_REG_R_SPARE, S->RSpare);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBytes(DevContext, AW869X_REG_BEMF_VTHH_H, S->BemfConfig, sizeof(S->BemfConfig));
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = Aw869xSetPref0(DevContext);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = Aw869xSetBstVol(DevContext, S->MaxBstVol);
+    return Status;
+}
+
+static NTSTATUS AwDoInitializeFamily(PDEVICE_CONTEXT DevContext)
+{
+    switch (DevContext->Family) {
+    case AwHapticFamily8692x:
+        return Aw8692xMiscInit(DevContext);
+    case AwHapticFamily8671x:
+        return Aw8671xMiscInit(DevContext);
+    case AwHapticFamily869xx:
+        return Aw869xxMiscInit(DevContext);
+    case AwHapticFamily869x:
+        return Aw869xMiscInit(DevContext);
+    default:
+        return STATUS_NOT_SUPPORTED;
+    }
+}
+
+static NTSTATUS Aw8692xStop(PDEVICE_CONTEXT DevContext)
+{
+    NTSTATUS Status;
+    UCHAR Stop = AW8692X_BIT_PLAYCFG4_STOP_ON;
+
+    Status = AwWriteByte(DevContext, AW8692X_REG_PLAYCFG4, Stop);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWaitStandbyCommon(DevContext, AW8692X_REG_GLBRD5);
+    if (!NT_SUCCESS(Status)) {
+        Status = AwWriteBits(DevContext, AW8692X_REG_SYSCTRL3,
+            (UCHAR)AW8692X_BIT_SYSCTRL3_STANDBY_MASK, AW8692X_BIT_SYSCTRL3_STANDBY_ON);
+        if (!NT_SUCCESS(Status)) return Status;
+        return AwWriteBits(DevContext, AW8692X_REG_SYSCTRL3,
+            (UCHAR)AW8692X_BIT_SYSCTRL3_STANDBY_MASK, AW8692X_BIT_SYSCTRL3_STANDBY_OFF);
+    }
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS Aw8671xStop(PDEVICE_CONTEXT DevContext)
+{
+    NTSTATUS Status;
+    UCHAR Stop = AW8671X_BIT_PLAYCFG4_STOP_ON;
+
+    Status = AwWriteByte(DevContext, AW8671X_REG_PLAYCFG4, Stop);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWaitStandbyCommon(DevContext, AW8671X_REG_GLBRD5);
+    if (!NT_SUCCESS(Status)) {
+        Status = AwWriteBits(DevContext, AW8671X_REG_SYSCTRL2,
+            (UCHAR)AW8671X_BIT_SYSCTRL2_STANDBY_MASK, AW8671X_BIT_SYSCTRL2_STANDBY_ON);
+        if (!NT_SUCCESS(Status)) return Status;
+        return AwWriteBits(DevContext, AW8671X_REG_SYSCTRL2,
+            (UCHAR)AW8671X_BIT_SYSCTRL2_STANDBY_MASK, AW8671X_BIT_SYSCTRL2_STANDBY_OFF);
+    }
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS Aw869xxStop(PDEVICE_CONTEXT DevContext)
+{
+    NTSTATUS Status;
+    UCHAR Stop = AW869XX_BIT_PLAYCFG4_STOP_ON;
+
+    Status = AwWriteByte(DevContext, AW869XX_REG_PLAYCFG4, Stop);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWaitStandbyCommon(DevContext, AW869XX_REG_GLBRD5);
+    if (!NT_SUCCESS(Status)) {
+        Status = AwWriteBits(DevContext, AW869XX_REG_SYSCTRL2,
+            (UCHAR)AW869XX_BIT_SYSCTRL2_STANDBY_MASK, AW869XX_BIT_SYSCTRL2_STANDBY_ON);
+        if (!NT_SUCCESS(Status)) return Status;
+        return AwWriteBits(DevContext, AW869XX_REG_SYSCTRL2,
+            (UCHAR)AW869XX_BIT_SYSCTRL2_STANDBY_MASK, AW869XX_BIT_SYSCTRL2_STANDBY_OFF);
+    }
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS Aw869xStopInternal(PDEVICE_CONTEXT DevContext)
+{
+    NTSTATUS Status;
+    UCHAR Value = AW869X_BIT_GO_DISABLE;
+    UCHAR RegValue = 0;
+    ULONG Count;
+
+    Status = AwWriteByte(DevContext, AW869X_REG_GO, Value);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    for (Count = 0; Count < AW_STANDBY_RETRIES; ++Count) {
+        Status = AwReadByte(DevContext, AW869X_REG_GLB_STATE, &RegValue);
+        if (!NT_SUCCESS(Status)) return Status;
+        if ((RegValue & 0x0F) == AW869X_BIT_GLB_STATE_STANDBY) {
+            break;
+        }
+        AwSleepUs(2500);
+    }
+
+    Status = AwWriteBits(DevContext, AW869X_REG_SYSINTM,
+        (UCHAR)AW869X_BIT_SYSINTM_UVLO_MASK, AW869X_BIT_SYSINTM_UVLO_OFF);
+    if (!NT_SUCCESS(Status)) return Status;
+    return AwWriteBits(DevContext, AW869X_REG_SYSCTRL,
+        (UCHAR)AW869X_BIT_SYSCTRL_WORK_MODE_MASK, AW869X_BIT_SYSCTRL_STANDBY);
 }
 
 NTSTATUS
 AW8624Stop(
-	PDEVICE_CONTEXT pDevice
+    PDEVICE_CONTEXT DevContext
 )
 {
-	NTSTATUS Status = STATUS_SUCCESS;
-	UINT16 RegData = 0;
-	UINT8 Count = 100;
+    if (DevContext == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
 
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_GO, AW8624_BIT_GO_MASK, AW8624_BIT_GO_DISABLE);
-
-	do
-	{
-		AW8624ReadRegWithCheck(pDevice, AW8624_REG_GLB_STATE, &RegData, sizeof(RegData));
-		Count--;
-	} while ((Count != 0) && ((RegData & 0x0F) != 0));
-
-	Status = AW8624Standby(pDevice);
-#ifdef DEBUG
-	if (!NT_SUCCESS(Status))
-	{
-		Trace(
-			TRACE_LEVEL_ERROR,
-			TRACE_SPB,
-			"Error when trying to stop AW8624 - 0x%08lX",
-			Status);
-	}
-#endif
-	return Status;
+    switch (DevContext->Family) {
+    case AwHapticFamily8692x:
+        return Aw8692xStop(DevContext);
+    case AwHapticFamily8671x:
+        return Aw8671xStop(DevContext);
+    case AwHapticFamily869xx:
+        return Aw869xxStop(DevContext);
+    case AwHapticFamily869x:
+        return Aw869xStopInternal(DevContext);
+    default:
+        return STATUS_DEVICE_NOT_READY;
+    }
 }
 
-NTSTATUS
-AW8624Start(
-	PDEVICE_CONTEXT pDevice
-)
+static NTSTATUS Aw8692xPlayContinuous(PDEVICE_CONTEXT DevContext, ULONG Intensity)
 {
-	NTSTATUS Status = STATUS_SUCCESS;
+    NTSTATUS Status;
+    UCHAR Gain = AwScaleU8(AW_GAIN_MAX, Intensity);
+    UCHAR Drv1 = AwScaleU8(DevContext->Settings.ContDrv1Lvl, Intensity);
+    UCHAR Drv2 = DevContext->Settings.ContDrv2Lvl;
+    UCHAR Drv2Time = 0xFF;
 
-	Status = AW8624Activate(pDevice);
+    Status = Aw8692xSetGain(DevContext, Gain);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8692X_REG_PLAYCFG3,
+        (UCHAR)AW8692X_BIT_PLAYCFG3_PLAY_MODE_MASK, AW8692X_BIT_PLAYCFG3_PLAY_MODE_CONT);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8692X_REG_PLAYCFG3,
+        (UCHAR)AW8692X_BIT_PLAYCFG3_BRK_EN_MASK, AW8692X_BIT_PLAYCFG3_BRK_ENABLE);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8692X_REG_PLAYCFG1,
+        (UCHAR)AW8692X_BIT_PLAYCFG1_BST_MODE_MASK, AW8692X_BIT_PLAYCFG1_BST_MODE_BYPASS);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8692X_REG_VBATCTRL,
+        (UCHAR)AW8692X_BIT_VBATCTRL_VBAT_MODE_MASK, AW8692X_BIT_VBATCTRL_VBAT_MODE_HW);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8692X_REG_CONTCFG6,
+        (UCHAR)AW8692X_BIT_CONTCFG6_TRACK_EN_MASK,
+        DevContext->Settings.TrackEnable ? AW8692X_BIT_CONTCFG6_TRACK_ENABLE : 0);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8692X_REG_CONTCFG6,
+        (UCHAR)AW8692X_BIT_CONTCFG6_DRV1_LVL_MASK, Drv1);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteByte(DevContext, AW8692X_REG_CONTCFG7, Drv2);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteByte(DevContext, AW8692X_REG_CONTCFG9, Drv2Time);
+    if (!NT_SUCCESS(Status)) return Status;
+    return AwWriteByte(DevContext, AW8692X_REG_PLAYCFG4, AW8692X_BIT_PLAYCFG4_GO_ON);
+}
 
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_GO, AW8624_BIT_GO_MASK, AW8624_BIT_GO_ENABLE);
+static NTSTATUS Aw8671xPlayContinuous(PDEVICE_CONTEXT DevContext, ULONG Intensity)
+{
+    NTSTATUS Status;
+    UCHAR Gain = AwScaleU8(AW_GAIN_MAX, Intensity);
+    UCHAR Drv1 = AwScaleU8(DevContext->Settings.ContDrv1Lvl, Intensity);
+    UCHAR Combined = (UCHAR)((DevContext->Settings.TrackEnable ? 0x80 : 0x00) | (Drv1 & 0x7F));
+    UCHAR Drv2Time = 0xFF;
 
-#ifdef DEBUG
-	if (!NT_SUCCESS(Status))
-	{
-		Trace(
-			TRACE_LEVEL_ERROR,
-			TRACE_SPB,
-			"Error when trying to start AW8624 - 0x%08lX",
-			Status);
-	}
-#endif
+    Status = Aw8671xSetGain(DevContext, Gain);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8671X_REG_PLAYCFG3,
+        (UCHAR)AW8671X_BIT_PLAYCFG3_PLAY_MODE_MASK, AW8671X_BIT_PLAYCFG3_PLAY_MODE_CONT);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8671X_REG_PLAYCFG3,
+        (UCHAR)AW8671X_BIT_PLAYCFG3_BRK_EN_MASK, AW8671X_BIT_PLAYCFG3_BRK_ENABLE);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8671X_REG_PLAYCFG1,
+        (UCHAR)AW8671X_BIT_PLAYCFG1_CP_MODE_MASK, AW8671X_BIT_PLAYCFG1_CP_MODE_BYPASS);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8671X_REG_VBATCTRL,
+        (UCHAR)AW8671X_BIT_VBATCTRL_VBAT_MODE_MASK, AW8671X_BIT_VBATCTRL_VBAT_MODE_HW);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteByte(DevContext, AW8671X_REG_CONTCFG6, Combined);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteByte(DevContext, AW8671X_REG_CONTCFG7, DevContext->Settings.ContDrv2Lvl);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteByte(DevContext, AW8671X_REG_CONTCFG9, Drv2Time);
+    if (!NT_SUCCESS(Status)) return Status;
+    return AwWriteByte(DevContext, AW8671X_REG_PLAYCFG4, AW8671X_BIT_PLAYCFG4_GO_ON);
+}
 
-	return Status;
+static NTSTATUS Aw869xxPlayContinuous(PDEVICE_CONTEXT DevContext, ULONG Intensity)
+{
+    NTSTATUS Status;
+    UCHAR Gain = AwScaleU8(AW_GAIN_MAX, Intensity);
+    UCHAR Drv1 = AwScaleU8(DevContext->Settings.ContDrv1Lvl, Intensity);
+    UCHAR Combined = (UCHAR)((DevContext->Settings.TrackEnable ? 0x80 : 0x00) | (Drv1 & 0x7F));
+    UCHAR Drv2Time = 0xFF;
+
+    Status = Aw869xxSetGain(DevContext, Gain);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW869XX_REG_PLAYCFG3,
+        (UCHAR)AW869XX_BIT_PLAYCFG3_PLAY_MODE_MASK, AW869XX_BIT_PLAYCFG3_PLAY_MODE_CONT);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW869XX_REG_PLAYCFG3,
+        (UCHAR)AW869XX_BIT_PLAYCFG3_BRK_EN_MASK, AW869XX_BIT_PLAYCFG3_BRK_ENABLE);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW869XX_REG_PLAYCFG1,
+        (UCHAR)AW869XX_BIT_PLAYCFG1_BST_MODE_MASK, AW869XX_BIT_PLAYCFG1_BST_MODE_BYPASS);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteByte(DevContext, AW869XX_REG_CONTCFG6, Combined);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteByte(DevContext, AW869XX_REG_CONTCFG7, DevContext->Settings.ContDrv2Lvl);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteByte(DevContext, AW869XX_REG_CONTCFG9, Drv2Time);
+    if (!NT_SUCCESS(Status)) return Status;
+    return AwWriteByte(DevContext, AW869XX_REG_PLAYCFG4, AW869XX_BIT_PLAYCFG4_GO_ON);
+}
+
+static NTSTATUS Aw869xPlayContinuous(PDEVICE_CONTEXT DevContext, ULONG Intensity)
+{
+    NTSTATUS Status;
+    UCHAR Gain = AwScaleU8(AW_GAIN_MAX, Intensity);
+    UCHAR DrvLevel[2];
+    UCHAR Td[2];
+    UCHAR Zc[2];
+    UCHAR TimeNzc = 0x23;
+
+    DrvLevel[0] = AwScaleU8(DevContext->Settings.ContDrvLvl, Intensity);
+    DrvLevel[1] = AwScaleU8(DevContext->Settings.ContDrvLvlOv, Intensity);
+    Td[0] = (UCHAR)((DevContext->Settings.ContTd >> 8) & 0xFF);
+    Td[1] = (UCHAR)(DevContext->Settings.ContTd & 0xFF);
+    Zc[0] = (UCHAR)((DevContext->Settings.ContZcThr >> 8) & 0xFF);
+    Zc[1] = (UCHAR)(DevContext->Settings.ContZcThr & 0xFF);
+
+    Status = Aw869xSetGain(DevContext, Gain);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW869X_REG_SYSCTRL,
+        (UCHAR)(AW869X_BIT_SYSCTRL_PLAY_MODE_MASK & AW869X_BIT_SYSCTRL_BST_MODE_MASK),
+        (UCHAR)(AW869X_BIT_SYSCTRL_PLAY_MODE_CONT | AW869X_BIT_SYSCTRL_BST_MODE_BYPASS));
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW869X_REG_SYSCTRL,
+        (UCHAR)AW869X_BIT_SYSCTRL_WORK_MODE_MASK, AW869X_BIT_SYSCTRL_ACTIVE);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW869X_REG_SYSINTM,
+        (UCHAR)AW869X_BIT_SYSINTM_UVLO_MASK, AW869X_BIT_SYSINTM_UVLO_EN);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW869X_REG_DATCTRL,
+        (UCHAR)(AW869X_BIT_DATCTRL_FC_MASK & AW869X_BIT_DATCTRL_LPF_ENABLE_MASK),
+        (UCHAR)(AW869X_BIT_DATCTRL_FC_1000HZ | AW869X_BIT_DATCTRL_LPF_ENABLE));
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW869X_REG_CONT_CTRL,
+        0x00,
+        (UCHAR)(AW869X_BIT_CONT_CTRL_ZC_DETEC_ENABLE |
+            AW869X_BIT_CONT_CTRL_WAIT_1PERIOD |
+            AW869X_BIT_CONT_CTRL_BY_GO_SIGNAL |
+            AW869X_BIT_CONT_CTRL_CLOSE_PLAYBACK |
+            AW869X_BIT_CONT_CTRL_F0_DETECT_DISABLE |
+            AW869X_BIT_CONT_CTRL_O2C_DISABLE |
+            AW869X_BIT_CONT_CTRL_AUTO_BRK_ENABLE));
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBytes(DevContext, AW869X_REG_TD_H, Td, sizeof(Td));
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteByte(DevContext, AW869X_REG_TSET, DevContext->Settings.Tset);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBytes(DevContext, AW869X_REG_ZC_THRSH_H, Zc, sizeof(Zc));
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW869X_REG_BEMF_NUM,
+        (UCHAR)AW869X_BIT_BEMF_NUM_BRK_MASK, DevContext->Settings.ContNumBrk);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteByte(DevContext, AW869X_REG_TIME_NZC, TimeNzc);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBytes(DevContext, AW869X_REG_DRV_LVL, DrvLevel, sizeof(DrvLevel));
+    if (!NT_SUCCESS(Status)) return Status;
+    return AwWriteByte(DevContext, AW869X_REG_GO, AW869X_BIT_GO_ENABLE);
 }
 
 NTSTATUS
 AW8624VibrateUntilStopped(
-	PDEVICE_CONTEXT pDevice,
-	ULONG Intensity
+    PDEVICE_CONTEXT DevContext,
+    ULONG Intensity
 )
 {
-	NTSTATUS Status = STATUS_SUCCESS;
+    NTSTATUS Status;
 
-	Intensity = Intensity * 0x9B / 100;
-	if (Intensity > 0x9B)
-		Intensity = 0x9B;
+    if (DevContext == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (!DevContext->HapticsInitialized) {
+        Status = AW8624Initialize(DevContext);
+        if (!NT_SUCCESS(Status)) {
+            return Status;
+        }
+    }
 
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_SYSCTRL, AW8624_BIT_SYSCTRL_PLAY_MODE_MASK, AW8624_BIT_SYSCTRL_PLAY_MODE_CONT);
-	Status = AW8624Activate(pDevice);
+    Status = AW8624Stop(DevContext);
+    if (!NT_SUCCESS(Status)) {
+        return Status;
+    }
 
-	if (!NT_SUCCESS(Status))
-	{
-		return Status;
-	}
-	
-	// 0x754 is retrieved from the following formula: 0x3B9ACA00 / 0x802 / 0x104,
-	// where 0x802 and 0x104 are from DTS (vib_f0_pre and vib_f0_coeff respectively)
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_F_PRE_H, (0x754 >> 8) & 0xFF);
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_F_PRE_L, 0x754 & 0xFF);
-
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_DATCTRL, AW8624_BIT_DATCTRL_FC_MASK, AW8624_BIT_DATCTRL_FC_1000HZ);
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_DATCTRL, AW8624_BIT_DATCTRL_LPF_ENABLE_MASK, AW8624_BIT_DATCTRL_LPF_ENABLE);
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_CONT_CTRL, AW8624_BIT_CONT_CTRL_ZC_DETEC_MASK, AW8624_BIT_CONT_CTRL_ZC_DETEC_ENABLE);
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_CONT_CTRL, AW8624_BIT_CONT_CTRL_WAIT_PERIOD_MASK, AW8624_BIT_CONT_CTRL_WAIT_1PERIOD);
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_CONT_CTRL, AW8624_BIT_CONT_CTRL_MODE_MASK, AW8624_BIT_CONT_CTRL_BY_GO_SIGNAL);
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_CONT_CTRL, AW8624_BIT_CONT_CTRL_EN_CLOSE_MASK, AW8624_BIT_CONT_CTRL_CLOSE_PLAYBACK);
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_CONT_CTRL, AW8624_BIT_CONT_CTRL_F0_DETECT_MASK, AW8624_BIT_CONT_CTRL_F0_DETECT_DISABLE);
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_CONT_CTRL, AW8624_BIT_CONT_CTRL_O2C_MASK, AW8624_BIT_CONT_CTRL_O2C_DISABLE);
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_CONT_CTRL, AW8624_BIT_CONT_CTRL_AUTO_BRK_MASK, AW8624_BIT_CONT_CTRL_AUTO_BRK_ENABLE);
-
-	// from DTS (vib_cont_td)
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_TD_H, 0xF06C >> 8);
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_TD_L, 0xF06C & 0xFF);
-
-	// from DTS (vib_tset)
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_TSET, 0x11);
-
-	// from DTS (vib_cont_zc_thr)
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_ZC_THRSH_H, 0x8F8 >> 8);
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_ZC_THRSH_L, 0x8F8 & 0xFF);
-
-	// from DTS (vib_cont_num_brk)
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_CONT_CTRL, AW8624_BIT_BEMF_NUM_BRK_MASK, 0x03);
-
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_TIME_NZC, 0x23);
-
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_DRV_LVL, (UINT16)Intensity);
-
-	// from DTS (vib_cont_drv_lvl_ov)
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_DRV_LVL_OV, 0x9B);
-
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_GO, AW8624_BIT_GO_MASK, AW8624_BIT_GO_ENABLE);
-
-	return Status;
+    switch (DevContext->Family) {
+    case AwHapticFamily8692x:
+        return Aw8692xPlayContinuous(DevContext, Intensity);
+    case AwHapticFamily8671x:
+        return Aw8671xPlayContinuous(DevContext, Intensity);
+    case AwHapticFamily869xx:
+        return Aw869xxPlayContinuous(DevContext, Intensity);
+    case AwHapticFamily869x:
+        return Aw869xPlayContinuous(DevContext, Intensity);
+    default:
+        return STATUS_DEVICE_NOT_READY;
+    }
 }
 
 NTSTATUS
-AW8624HapticsInit(
-	PDEVICE_CONTEXT pDevice
+AW8624Start(
+    PDEVICE_CONTEXT DevContext
 )
 {
-	NTSTATUS Status = STATUS_SUCCESS;
-
-#ifdef DEBUG
-	Trace(TRACE_LEVEL_INFORMATION, TRACE_SPB, "%!FUNC!: Entry");
-#endif
-
-	Status = AW8624Standby(pDevice);
-
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_PWMDBG, AW8624_BIT_PWMDBG_PWM_MODE_MASK, AW8624_BIT_PWMDBG_PWM_24K);
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_DETCTRL, AW8624_BIT_DETCTRL_PROTECT_MASK, AW8624_BIT_DETCTRL_PROTECT_NO_ACTION);
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_PWMPRC, AW8624_BIT_PWMPRC_PRC_EN_MASK, AW8624_BIT_PWMPRC_PRC_DISABLE);
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_PRLVL, AW8624_BIT_PRLVL_PR_EN_MASK, AW8624_BIT_PRLVL_PR_DISABLE);
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_ADCTEST, AW8624_BIT_DETCTRL_VBAT_MODE_MASK, AW8624_BIT_DETCTRL_VBAT_HW_COMP);
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_R_SPARE, AW8624_BIT_R_SPARE_MASK, AW8624_BIT_R_SPARE_ENABLE);
-
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_TRIM_LRA, 0x00);
-
-	Status = AW8624Standby(pDevice);
-	Status = AW8624RamMode(pDevice);
-	Status = AW8624Stop(pDevice);
-
-	// from DTS (vib_sw_brake)
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_SW_BRAKE, 0x2C);
-
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_THRS_BRA_END, 0x00);
-
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_WAVECTRL, AW8624_BIT_WAVECTRL_NUM_OV_DRIVER_MASK, AW8624_BIT_WAVECTRL_NUM_OV_DRIVER);
-
-	// from DTS (vib_cont_zc_thr)
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_ZC_THRSH_L, 0x8F8);
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_ZC_THRSH_H, 0x8F8 >> 8);
-
-	// from DTS (vib_tset)
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_TSET, 0x11);
-
-	// from DTS (vib_bemf_config[0..3])
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_BEMF_VTHH_H, 0x00);
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_BEMF_VTHH_L, 0x08);
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_BEMF_VTHL_H, 0x03);
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_BEMF_VTHL_L, 0xF8);
-
-	return Status;
-}
-
-NTSTATUS
-AW8624SetupInterrupts(
-	PDEVICE_CONTEXT pDevice
-)
-{
-	NTSTATUS Status = STATUS_SUCCESS;
-	UINT16 RegData = 0;
-
-#ifdef DEBUG
-	Trace(TRACE_LEVEL_INFORMATION, TRACE_SPB, "%!FUNC!: Entry");
-#endif
-
-	AW8624ReadRegWithCheck(pDevice, AW8624_REG_SYSINT, &RegData, sizeof(RegData));
-
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_DBGCTRL, AW8624_BIT_DBGCTRL_INTMODE_MASK, AW8624_BIT_DBGCTRL_INTN_EDGE_MODE);
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_SYSINTM, AW8624_BIT_SYSINTM_UVLO_MASK, AW8624_BIT_SYSINTM_UVLO_EN);
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_SYSINTM, AW8624_BIT_SYSINTM_OCD_MASK, AW8624_BIT_SYSINTM_OCD_EN);
-	AW8624WriteBitsWithCheck(pDevice, AW8624_REG_SYSINTM, AW8624_BIT_SYSINTM_OT_MASK, AW8624_BIT_SYSINTM_OT_EN);
-
-	return Status;
+    return AW8624VibrateUntilStopped(DevContext, 100);
 }
 
 NTSTATUS
 AW8624Initialize(
-	PDEVICE_CONTEXT pDevice
+    PDEVICE_CONTEXT DevContext
 )
 {
-	NTSTATUS Status = STATUS_SUCCESS;
+    NTSTATUS Status;
+
+    if (DevContext == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = AwReadChipId(DevContext);
+    if (!NT_SUCCESS(Status)) {
+        return Status;
+    }
+
+    AwLoadNx729jLeftSettings(DevContext);
+    Status = AwDoInitializeFamily(DevContext);
+    if (!NT_SUCCESS(Status)) {
+        return Status;
+    }
+
+    DevContext->HapticsInitialized = TRUE;
+
 #ifdef DEBUG
-	UINT16 RegData = 0;
-
-	Trace(TRACE_LEVEL_INFORMATION, TRACE_SPB, "%!FUNC!: Entry");
-
-	AW8624ReadRegWithCheck(pDevice, AW8624_REG_ID, &RegData, sizeof(RegData));
-	Trace(TRACE_LEVEL_INFORMATION, TRACE_SPB, "%!FUNC!: Chip ID = 0x%X", (RegData & 0xFF));
+    Trace(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
+        "%!FUNC!: compatible=awinic,haptic_hv_l chipId=0x%04X family=%lu interruptPresent=%lu",
+        DevContext->ChipId,
+        (ULONG)DevContext->Family,
+        DevContext->InterruptPresent ? 1UL : 0UL);
 #endif
 
-	// Soft reset
-	AW8624WriteRegWithCheck(pDevice, AW8624_REG_ID, 0xAA);
-
-	Status = AW8624SetupInterrupts(pDevice);
-	if (!NT_SUCCESS(Status))
-	{
-		return Status;
-	}
-
-	Status = AW8624HapticsInit(pDevice);
-	if (!NT_SUCCESS(Status))
-	{
-		return Status;
-	}
-
-	return Status;
+    return STATUS_SUCCESS;
 }

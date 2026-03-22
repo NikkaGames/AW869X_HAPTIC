@@ -49,6 +49,7 @@ typedef struct _DEVICE_CONTEXT
 	// Interrupt servicing
 	//
 	WDFINTERRUPT InterruptObject;
+	BOOLEAN InterruptPresent;
 
 	//
 	// Spb (I2C) related members used for the lifetime of the device
@@ -59,6 +60,10 @@ typedef struct _DEVICE_CONTEXT
 	// Number of vibration motors
 	//
 	USHORT NumberOfHapticsDevices;
+	AW_HAPTIC_FAMILY Family;
+	ULONG ChipId;
+	AW_HAPTIC_SETTINGS Settings;
+	BOOLEAN HapticsInitialized;
 
 	PAW8624_HAPTICS_CURRENT_STATE CurrentStates;
 	HWN_STATE PreviousState;

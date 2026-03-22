@@ -75,6 +75,7 @@ AW8624HapticsInitializeDevice(
 	globalContext = devContext;
 	
 	devContext->Device = Device;
+	devContext->InterruptPresent = FALSE;
 
 	//
 	// Get the resouce hub connection ID for our I2C driver
@@ -131,12 +132,23 @@ AW8624HapticsInitializeDevice(
 			}
 
 			InterruptDetected = TRUE;
+			devContext->InterruptPresent = TRUE;
 		}
 	}
 
-	if (I2CDetected && InterruptDetected)
+	if (I2CDetected)
 	{
 		status = STATUS_SUCCESS;
+	}
+
+	if (!InterruptDetected)
+	{
+#ifdef DEBUG
+		Trace(
+			TRACE_LEVEL_WARNING,
+			TRACE_INIT,
+			"No interrupt resource found, continuing in I2C-only mode");
+#endif
 	}
 
 	if (!NT_SUCCESS(status))
