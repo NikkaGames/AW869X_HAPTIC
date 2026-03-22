@@ -23,6 +23,8 @@ Environment:
 #include "HwnDefs.tmh"
 #endif
 
+#define AW869X_DEFAULT_ON_PULSE_MS 350
+
 NTSTATUS
 AW8624HapticsToggleVibrationMotor(
 	PDEVICE_CONTEXT devContext,
@@ -68,6 +70,21 @@ AW8624HapticsToggleVibrationMotor(
 	case HWN_ON:
 	{
 		status = AW8624VibrateUntilStopped(devContext, intensity);
+		pulseMs = AW869X_DEFAULT_ON_PULSE_MS;
+		if (NT_SUCCESS(status) && devContext->BlinkTimer != NULL)
+		{
+			if (!WdfTimerStart(devContext->BlinkTimer, WDF_REL_TIMEOUT_IN_MS(pulseMs)))
+			{
+#ifdef DEBUG
+				Trace(
+					TRACE_LEVEL_WARNING,
+					TRACE_HAPTICS,
+					"%!FUNC!: timer already queued pulseMs=%lu intensity=%lu",
+					pulseMs,
+					intensity);
+#endif
+			}
+		}
 		break;
 	}
 	case HWN_BLINK:
