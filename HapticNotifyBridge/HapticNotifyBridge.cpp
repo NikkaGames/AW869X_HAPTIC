@@ -24,9 +24,7 @@ constexpr wchar_t kQuery[] = L"*";
 constexpr DWORD kNotificationDebounceMs = 4000;
 constexpr DWORD kSubscriptionRetryMs = 5000;
 constexpr ULONG kNotificationIntensity = 50;
-constexpr DWORD kPulseOnMs = 250;
-constexpr DWORD kPulseOffMs = 150;
-constexpr ULONG kPulseCount = 3;
+constexpr DWORD kPulseOnMs = 350;
 
 SERVICE_STATUS g_serviceStatus = {};
 SERVICE_STATUS_HANDLE g_serviceStatusHandle = nullptr;
@@ -244,23 +242,17 @@ bool SendHwnState(HWN_STATE state, ULONG intensity)
 
 bool TriggerNotificationPulse()
 {
-    for (ULONG i = 0; i < kPulseCount; ++i) {
-        if (!SendHwnState(HWN_ON, kNotificationIntensity)) {
-            return false;
-        }
-        Sleep(kPulseOnMs);
-        if (!SendHwnState(HWN_OFF, 0)) {
-            return false;
-        }
-        if (i + 1 < kPulseCount) {
-            Sleep(kPulseOffMs);
-        }
+    if (!SendHwnState(HWN_ON, kNotificationIntensity)) {
+        return false;
+    }
+    Sleep(kPulseOnMs);
+    if (!SendHwnState(HWN_OFF, 0)) {
+        return false;
     }
 
-    Log(L"haptic-bridge: notification pattern sent count=%lu onMs=%lu offMs=%lu",
-        kPulseCount,
+    Log(L"haptic-bridge: notification pulse sent onMs=%lu intensity=%lu",
         (ULONG)kPulseOnMs,
-        (ULONG)kPulseOffMs);
+        kNotificationIntensity);
     return true;
 }
 
