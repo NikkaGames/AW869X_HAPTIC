@@ -838,7 +838,7 @@ AW8624Start(
 
     Status = AW8624VibrateUntilStopped(DevContext, 50);
     if (NT_SUCCESS(Status)) {
-        AwSleepMs(500);
+        AwSleepMs(666);
         Status = AW8624Stop(DevContext);
     }
 
@@ -846,7 +846,7 @@ AW8624Start(
     Trace(TRACE_LEVEL_INFORMATION, TRACE_HAPTICS,
         "%!FUNC!: start-intensity=%lu durationMs=%lu family=%lu chipId=0x%04X status=%!STATUS!",
         50UL,
-        500UL,
+        666UL,
         (ULONG)DevContext->Family,
         DevContext->ChipId,
         Status);
