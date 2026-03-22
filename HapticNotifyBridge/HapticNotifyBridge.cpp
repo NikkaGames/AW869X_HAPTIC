@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+#include <strsafe.h>
 
 #include <initguid.h>
 #include <hwn.h>
@@ -19,7 +20,6 @@ namespace {
 
 constexpr wchar_t kServiceName[] = L"AW869XNotifySvc";
 constexpr wchar_t kServiceDisplayName[] = L"AW869X Notification Service";
-constexpr wchar_t kChannelPath[] = L"Microsoft-Windows-PushNotification-Platform/Operational";
 constexpr wchar_t kQuery[] = L"*";
 constexpr DWORD kNotificationDebounceMs = 1500;
 constexpr DWORD kSubscriptionRetryMs = 5000;
@@ -31,9 +31,11 @@ constexpr ULONG kNotificationCycles = 1;
 SERVICE_STATUS g_serviceStatus = {};
 SERVICE_STATUS_HANDLE g_serviceStatusHandle = nullptr;
 HANDLE g_stopEvent = nullptr;
-EVT_HANDLE g_subscription = nullptr;
+EVT_HANDLE g_subscriptionPush = nullptr;
+EVT_HANDLE g_subscriptionShell = nullptr;
 HANDLE g_hwnHandle = INVALID_HANDLE_VALUE;
 volatile ULONGLONG g_lastPulseTick = 0;
+WCHAR g_logPath[MAX_PATH] = {};
 
 struct HWN_SET_PACKET_ONE {
     ULONG HwNPayloadSize;
@@ -44,13 +46,59 @@ struct HWN_SET_PACKET_ONE {
 
 void Log(const wchar_t* fmt, ...)
 {
-    wchar_t buffer[512];
+    wchar_t buffer[1024];
+    wchar_t line[1200];
     va_list args;
+    HANDLE file = INVALID_HANDLE_VALUE;
+    DWORD bytesWritten = 0;
+    SYSTEMTIME st = {};
+
+    GetLocalTime(&st);
     va_start(args, fmt);
     _vsnwprintf_s(buffer, _countof(buffer), _TRUNCATE, fmt, args);
     va_end(args);
-    OutputDebugStringW(buffer);
-    OutputDebugStringW(L"\n");
+    StringCchPrintfW(
+        line,
+        _countof(line),
+        L"[%04u-%02u-%02u %02u:%02u:%02u.%03u] %s\r\n",
+        st.wYear,
+        st.wMonth,
+        st.wDay,
+        st.wHour,
+        st.wMinute,
+        st.wSecond,
+        st.wMilliseconds,
+        buffer);
+    OutputDebugStringW(line);
+    if (g_logPath[0] == L'\0') {
+        return;
+    }
+    file = CreateFileW(
+        g_logPath,
+        FILE_APPEND_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (file != INVALID_HANDLE_VALUE) {
+        WriteFile(file, line, (DWORD)(wcslen(line) * sizeof(WCHAR)), &bytesWritten, nullptr);
+        CloseHandle(file);
+    }
+}
+
+void InitializeLogPath()
+{
+    WCHAR programData[MAX_PATH] = {};
+    WCHAR logDir[MAX_PATH] = {};
+
+    if (ExpandEnvironmentStringsW(L"%ProgramData%", programData, _countof(programData)) == 0) {
+        return;
+    }
+
+    StringCchPrintfW(logDir, _countof(logDir), L"%s\\Nikka", programData);
+    CreateDirectoryW(logDir, nullptr);
+    StringCchPrintfW(g_logPath, _countof(g_logPath), L"%s\\AW869XNotifySvc.log", logDir);
 }
 
 void UpdateServiceStatus(DWORD currentState, DWORD win32ExitCode, DWORD waitHint)
@@ -190,10 +238,37 @@ bool TriggerNotificationPulse()
     return true;
 }
 
+bool RenderEventXml(EVT_HANDLE eventHandle, std::wstring& xml)
+{
+    DWORD bufferUsed = 0;
+    DWORD propertyCount = 0;
+    std::vector<wchar_t> buffer;
+
+    if (!EvtRender(nullptr, eventHandle, EvtRenderEventXml, 0, nullptr, &bufferUsed, &propertyCount)) {
+        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || bufferUsed == 0) {
+            return false;
+        }
+    }
+
+    buffer.resize(bufferUsed / sizeof(wchar_t) + 1);
+    if (!EvtRender(nullptr, eventHandle, EvtRenderEventXml, (DWORD)(buffer.size() * sizeof(wchar_t)), buffer.data(), &bufferUsed, &propertyCount)) {
+        return false;
+    }
+
+    xml.assign(buffer.data());
+    return true;
+}
+
 DWORD WINAPI EventCallback(EVT_SUBSCRIBE_NOTIFY_ACTION action, PVOID, EVT_HANDLE eventHandle)
 {
+    std::wstring xml;
+
     if (action != EvtSubscribeActionDeliver) {
         return ERROR_SUCCESS;
+    }
+
+    if (eventHandle != nullptr && RenderEventXml(eventHandle, xml)) {
+        Log(L"haptic-bridge: event=%s", xml.c_str());
     }
 
     const ULONGLONG now = GetTickCount64();
@@ -213,32 +288,45 @@ DWORD WINAPI EventCallback(EVT_SUBSCRIBE_NOTIFY_ACTION action, PVOID, EVT_HANDLE
     return ERROR_SUCCESS;
 }
 
-bool StartSubscription()
+bool StartSubscriptionForChannel(const wchar_t* channelPath, EVT_HANDLE* subscriptionHandle)
 {
-    g_subscription = EvtSubscribe(
+    *subscriptionHandle = EvtSubscribe(
         nullptr,
         g_stopEvent,
-        kChannelPath,
+        channelPath,
         kQuery,
         nullptr,
         nullptr,
         reinterpret_cast<EVT_SUBSCRIBE_CALLBACK>(EventCallback),
         EvtSubscribeToFutureEvents);
 
-    if (g_subscription == nullptr) {
-        Log(L"haptic-bridge: EvtSubscribe failed, error=%lu", GetLastError());
+    if (*subscriptionHandle == nullptr) {
+        Log(L"haptic-bridge: EvtSubscribe failed channel=%s error=%lu", channelPath, GetLastError());
         return false;
     }
 
-    Log(L"haptic-bridge: subscribed to %s", kChannelPath);
+    Log(L"haptic-bridge: subscribed to %s", channelPath);
     return true;
 }
 
-void StopSubscription()
+bool StartSubscriptions()
 {
-    if (g_subscription != nullptr) {
-        EvtClose(g_subscription);
-        g_subscription = nullptr;
+    bool any = false;
+
+    any = StartSubscriptionForChannel(L"Microsoft-Windows-PushNotification-Platform/Operational", &g_subscriptionPush) || any;
+    any = StartSubscriptionForChannel(L"Microsoft-Windows-Shell-Core/ActionCenter", &g_subscriptionShell) || any;
+    return any;
+}
+
+void StopSubscriptions()
+{
+    if (g_subscriptionPush != nullptr) {
+        EvtClose(g_subscriptionPush);
+        g_subscriptionPush = nullptr;
+    }
+    if (g_subscriptionShell != nullptr) {
+        EvtClose(g_subscriptionShell);
+        g_subscriptionShell = nullptr;
     }
 }
 
@@ -267,7 +355,7 @@ void RunWorker()
 
     EnsureHwnHandle();
     while (WaitForSingleObject(g_stopEvent, 0) != WAIT_OBJECT_0) {
-        if (StartSubscription()) {
+        if (StartSubscriptions()) {
             WaitForSingleObject(g_stopEvent, INFINITE);
             break;
         }
@@ -278,7 +366,7 @@ void RunWorker()
         }
     }
 
-    StopSubscription();
+    StopSubscriptions();
     CloseHwnHandle();
     CloseHandle(g_stopEvent);
     g_stopEvent = nullptr;
@@ -368,6 +456,8 @@ bool UninstallService()
 
 int wmain(int argc, wchar_t** argv)
 {
+    InitializeLogPath();
+
     if (argc > 1) {
         if (_wcsicmp(argv[1], L"install") == 0) {
             return InstallService() ? 0 : 1;
@@ -378,6 +468,9 @@ int wmain(int argc, wchar_t** argv)
         if (_wcsicmp(argv[1], L"run") == 0) {
             RunWorker();
             return 0;
+        }
+        if (_wcsicmp(argv[1], L"pulse") == 0) {
+            return TriggerNotificationPulse() ? 0 : 1;
         }
     }
 
