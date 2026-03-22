@@ -762,7 +762,30 @@ AW8624Start(
     PDEVICE_CONTEXT DevContext
 )
 {
-    return AW8624VibrateUntilStopped(DevContext, 15);
+    NTSTATUS Status;
+
+    if (DevContext == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (!DevContext->HapticsInitialized) {
+        Status = AW8624Initialize(DevContext);
+        if (!NT_SUCCESS(Status)) {
+            return Status;
+        }
+    }
+
+    Status = AW8624Stop(DevContext);
+
+#ifdef DEBUG
+    Trace(TRACE_LEVEL_INFORMATION, TRACE_HAPTICS,
+        "%!FUNC!: prepare-only family=%lu chipId=0x%04X status=%!STATUS!",
+        (ULONG)DevContext->Family,
+        DevContext->ChipId,
+        Status);
+#endif
+
+    return Status;
 }
 
 NTSTATUS
