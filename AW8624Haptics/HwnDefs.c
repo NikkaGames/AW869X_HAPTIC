@@ -25,6 +25,17 @@ Environment:
 
 #define AW869X_DEFAULT_ON_PULSE_MS 350
 
+static VOID
+AW8624HapticsSleepMs(
+	ULONG Milliseconds
+)
+{
+	LARGE_INTEGER interval = {};
+
+	interval.QuadPart = -((LONGLONG)Milliseconds * 10 * 1000);
+	KeDelayExecutionThread(KernelMode, FALSE, &interval);
+}
+
 NTSTATUS
 AW8624HapticsToggleVibrationMotor(
 	PDEVICE_CONTEXT devContext,
@@ -70,20 +81,11 @@ AW8624HapticsToggleVibrationMotor(
 	case HWN_ON:
 	{
 		status = AW8624VibrateUntilStopped(devContext, intensity);
-		pulseMs = AW869X_DEFAULT_ON_PULSE_MS;
-		if (NT_SUCCESS(status) && devContext->BlinkTimer != NULL)
+		if (NT_SUCCESS(status))
 		{
-			if (!WdfTimerStart(devContext->BlinkTimer, WDF_REL_TIMEOUT_IN_MS(pulseMs)))
-			{
-#ifdef DEBUG
-				Trace(
-					TRACE_LEVEL_WARNING,
-					TRACE_HAPTICS,
-					"%!FUNC!: timer already queued pulseMs=%lu intensity=%lu",
-					pulseMs,
-					intensity);
-#endif
-			}
+			pulseMs = AW869X_DEFAULT_ON_PULSE_MS;
+			AW8624HapticsSleepMs(pulseMs);
+			status = AW8624Stop(devContext);
 		}
 		break;
 	}
