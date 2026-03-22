@@ -164,6 +164,8 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
     <DebuggerFlavor>DbgengKernelDebugger</DebuggerFlavor>
     <Inf2CatUseLocalTime>true</Inf2CatUseLocalTime>
+    <AwNotifyServiceBuildScript>$(SolutionDir)HapticNotifyBridge\build_arm64.cmd</AwNotifyServiceBuildScript>
+    <AwNotifyServiceSource>$(SolutionDir)HapticNotifyBridge\ARM64\Release\AW869XNotifySvc.exe</AwNotifyServiceSource>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -259,6 +261,9 @@
       <WppOutputDirectory>$(IntDir)</WppOutputDirectory>
       <PreprocessorDefinitions>DEBUG=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
+    <PreBuildEvent>
+      <Command>"$(AwNotifyServiceBuildScript)"</Command>
+    </PreBuildEvent>
     <DriverSign>
       <FileDigestAlgorithm>sha256</FileDigestAlgorithm>
     </DriverSign>
@@ -285,6 +290,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <FilesToPackage Include="$(TargetPath)" />
+    <FilesToPackage Include="$(AwNotifyServiceSource)" Condition="'$(AwNotifyServiceSource)' != ''" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

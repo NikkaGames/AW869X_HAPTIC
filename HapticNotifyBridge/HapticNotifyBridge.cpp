@@ -17,8 +17,8 @@
 
 namespace {
 
-constexpr wchar_t kServiceName[] = L"HapticNotifyBridge";
-constexpr wchar_t kServiceDisplayName[] = L"Haptic Notification Bridge";
+constexpr wchar_t kServiceName[] = L"AW869XNotifySvc";
+constexpr wchar_t kServiceDisplayName[] = L"AW869X Notification Service";
 constexpr wchar_t kChannelPath[] = L"Microsoft-Windows-PushNotification-Platform/Operational";
 constexpr wchar_t kQuery[] = L"*";
 constexpr DWORD kNotificationDebounceMs = 1500;

@@ -22,7 +22,7 @@ cl /nologo /std:c++17 /EHsc /O2 /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN ^
   /I"%SDKROOT%\Include\%SDKVER%\ucrt" ^
   /I"%SDKROOT%\Include\%SDKVER%\shared" ^
   /I"%SDKROOT%\Include\%SDKVER%\um" ^
-  /Fe:"%OUTDIR%\HapticNotifyBridge.exe" ^
+  /Fe:"%OUTDIR%\AW869XNotifySvc.exe" ^
   C:\woa\drivers\AW8624Haptics\HapticNotifyBridge\HapticNotifyBridge.cpp ^
   /link ^
   /LIBPATH:"%SDKROOT%\Lib\%SDKVER%\ucrt\arm64" ^

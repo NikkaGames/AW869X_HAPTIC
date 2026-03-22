@@ -19,6 +19,7 @@ DefaultDestDir = 13
 
 [SourceDisksFiles]
 AW869XHaptics.sys = 1,,
+AW869XNotifySvc.exe = 1,,
 
 ;*****************************************
 ; Install Section
@@ -31,14 +32,18 @@ AW869XHaptics.sys = 1,,
 %AW869XHaptics.DeviceDesc% = AW869XHaptics_Device, ACPI\AWNC8624
 
 [AW869XHaptics_Device.NT]
-CopyFiles = Drivers_Dir
+CopyFiles = Drivers_Dir, NotifySvc_Dir
 
 [Drivers_Dir]
 AW869XHaptics.sys
 
+[NotifySvc_Dir]
+AW869XNotifySvc.exe
+
 ;-------------- Service installation
 [AW869XHaptics_Device.NT.Services]
 AddService = AW869XHaptics, %SPSVCINST_ASSOCSERVICE%, AW869XHaptics_Service_Inst
+AddService = AW869XNotifySvc, 0x00000000, AW869XNotifySvc_Service_Inst
 
 ; -------------- AW869XHaptics driver install sections
 [AW869XHaptics_Service_Inst]
@@ -48,6 +53,15 @@ StartType      = 3               ; SERVICE_DEMAND_START
 ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
 ServiceBinary  = %13%\AW869XHaptics.sys
 
+[AW869XNotifySvc_Service_Inst]
+DisplayName    = %AW869XNotifySvc.SVCDESC%
+ServiceType    = 0x10            ; SERVICE_WIN32_OWN_PROCESS
+StartType      = 2               ; SERVICE_AUTO_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %13%\AW869XNotifySvc.exe
+StartName      = "LocalSystem"
+Dependencies   = EventLog
+
 [Strings]
 SPSVCINST_ASSOCSERVICE    = 0x00000002
 
@@ -55,3 +69,4 @@ ManufacturerName          = "Nikka"
 DiskName                  = "AW869X Haptics Installation Disk"
 AW869XHaptics.DeviceDesc  = "AW869X Haptics Device"
 AW869XHaptics.SVCDESC     = "AW869X Haptics Device"
+AW869XNotifySvc.SVCDESC   = "AW869X Notification Service"
