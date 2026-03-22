@@ -51,7 +51,7 @@ ServiceBinary  = %13%\AW8624Haptics.sys
 [Strings]
 SPSVCINST_ASSOCSERVICE    = 0x00000002
 
-ManufacturerName          = "Aistop"
+ManufacturerName          = "Nikka"
 DiskName                  = "AW8624 Haptics Installation Disk"
 AW8624Haptics.DeviceDesc  = "AW8624 Haptics Device"
 AW8624Haptics.SVCDESC     = "AW8624 Haptics Device"
