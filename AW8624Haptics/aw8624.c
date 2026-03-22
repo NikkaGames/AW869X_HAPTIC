@@ -824,12 +824,12 @@ AW8624Start(
         }
     }
 
-    Status = AW8624VibrateUntilStopped(DevContext, 5);
+    Status = AW8624VibrateUntilStopped(DevContext, 50);
 
 #ifdef DEBUG
     Trace(TRACE_LEVEL_INFORMATION, TRACE_HAPTICS,
         "%!FUNC!: start-intensity=%lu family=%lu chipId=0x%04X status=%!STATUS!",
-        5UL,
+        50UL,
         (ULONG)DevContext->Family,
         DevContext->ChipId,
         Status);
