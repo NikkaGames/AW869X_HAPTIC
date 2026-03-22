@@ -93,14 +93,7 @@ Return Value:
 	}
 
 	devContext = DeviceGetContext(device);
-	if (devContext == NULL)
-	{
-#ifdef DEBUG
-		Trace(TRACE_LEVEL_ERROR, TRACE_DRIVER, "DeviceGetContext failed");
-#endif
-		//status = STATUS_INSUFFICIENT_RESOURCES;
-	}
-	else
+	if (devContext != NULL)
 	{
 		devContext->Device = device;
 	}

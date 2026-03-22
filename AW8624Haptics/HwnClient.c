@@ -272,13 +272,27 @@ AW8624HapticsStartDevice(
 	__in PVOID Context
 )
 {
-	UNREFERENCED_PARAMETER(Context);
 	NTSTATUS status = STATUS_SUCCESS;
+	PDEVICE_CONTEXT devContext = (PDEVICE_CONTEXT)Context;
 
 	PAGED_CODE();
 
 #ifdef DEBUG
 	Trace(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC! Entry");
+#endif
+
+#ifdef DEBUG
+	if (devContext == NULL)
+	{
+		Trace(TRACE_LEVEL_ERROR, TRACE_DRIVER, "%!FUNC!: invalid context");
+		return STATUS_INVALID_PARAMETER;
+	}
+#endif
+
+	status = AW8624Start(devContext);
+
+#ifdef DEBUG
+	Trace(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC!: status=%!STATUS!", status);
 #endif
 
 	return status;
@@ -289,13 +303,27 @@ AW8624HapticsStopDevice(
 	__in PVOID Context
 )
 {
-	UNREFERENCED_PARAMETER(Context);
 	NTSTATUS status = STATUS_SUCCESS;
+	PDEVICE_CONTEXT devContext = (PDEVICE_CONTEXT)Context;
 
 	PAGED_CODE();
 
 #ifdef DEBUG
 	Trace(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC! Entry");
+#endif
+
+#ifdef DEBUG
+	if (devContext == NULL)
+	{
+		Trace(TRACE_LEVEL_ERROR, TRACE_DRIVER, "%!FUNC!: invalid context");
+		return STATUS_INVALID_PARAMETER;
+	}
+#endif
+
+	status = AW8624Stop(devContext);
+
+#ifdef DEBUG
+	Trace(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC!: status=%!STATUS!", status);
 #endif
 
 	return status;
