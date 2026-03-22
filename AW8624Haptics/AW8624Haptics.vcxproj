@@ -61,8 +61,9 @@
     <MinimumVisualStudioVersion>12.0</MinimumVisualStudioVersion>
     <Configuration>Debug</Configuration>
     <Platform Condition="'$(Platform)' == ''">Win32</Platform>
-    <RootNamespace>AW8624Haptics</RootNamespace>
-    <ProjectName>AW8624Haptics</ProjectName>
+    <RootNamespace>AW869XHaptics</RootNamespace>
+    <ProjectName>AW869XHaptics</ProjectName>
+    <TargetName>AW869XHaptics</TargetName>
     <WindowsTargetPlatformVersion>$(LatestTargetPlatformVersion)</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />

@@ -1,5 +1,5 @@
 ;
-; AW8624Haptics.inf
+; AW869XHaptics.inf
 ;
 
 [Version]
@@ -7,7 +7,7 @@ Signature   = "$WINDOWS NT$"
 Class       = System
 ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
 Provider    = %ManufacturerName%
-CatalogFile = AW8624Haptics.cat
+CatalogFile = AW869XHaptics.cat
 DriverVer   = 1.0.0
 PnpLockdown = 1
 
@@ -18,7 +18,7 @@ DefaultDestDir = 13
 1 = %DiskName%,,,""
 
 [SourceDisksFiles]
-AW8624Haptics.sys = 1,,
+AW869XHaptics.sys = 1,,
 
 ;*****************************************
 ; Install Section
@@ -28,30 +28,30 @@ AW8624Haptics.sys = 1,,
 %ManufacturerName% = Standard,NT$ARCH$.10.0...16299
 
 [Standard.NT$ARCH$.10.0...16299]
-%AW8624Haptics.DeviceDesc% = AW8624Haptics_Device, ACPI\AWNC8624
+%AW869XHaptics.DeviceDesc% = AW869XHaptics_Device, ACPI\AWNC8624
 
-[AW8624Haptics_Device.NT]
+[AW869XHaptics_Device.NT]
 CopyFiles = Drivers_Dir
 
 [Drivers_Dir]
-AW8624Haptics.sys
+AW869XHaptics.sys
 
 ;-------------- Service installation
-[AW8624Haptics_Device.NT.Services]
-AddService = AW8624Haptics, %SPSVCINST_ASSOCSERVICE%, AW8624Haptics_Service_Inst
+[AW869XHaptics_Device.NT.Services]
+AddService = AW869XHaptics, %SPSVCINST_ASSOCSERVICE%, AW869XHaptics_Service_Inst
 
-; -------------- AW8624Haptics driver install sections
-[AW8624Haptics_Service_Inst]
-DisplayName    = %AW8624Haptics.SVCDESC%
+; -------------- AW869XHaptics driver install sections
+[AW869XHaptics_Service_Inst]
+DisplayName    = %AW869XHaptics.SVCDESC%
 ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
 StartType      = 3               ; SERVICE_DEMAND_START
 ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
-ServiceBinary  = %13%\AW8624Haptics.sys
+ServiceBinary  = %13%\AW869XHaptics.sys
 
 [Strings]
 SPSVCINST_ASSOCSERVICE    = 0x00000002
 
 ManufacturerName          = "Nikka"
-DiskName                  = "AW8624 Haptics Installation Disk"
-AW8624Haptics.DeviceDesc  = "AW8624 Haptics Device"
-AW8624Haptics.SVCDESC     = "AW8624 Haptics Device"
+DiskName                  = "AW869X Haptics Installation Disk"
+AW869XHaptics.DeviceDesc  = "AW869X Haptics Device"
+AW869XHaptics.SVCDESC     = "AW869X Haptics Device"
