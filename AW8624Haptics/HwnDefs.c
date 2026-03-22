@@ -23,7 +23,7 @@ Environment:
 #include "HwnDefs.tmh"
 #endif
 
-#define AW869X_DEFAULT_ON_PULSE_MS 350
+#define AW869X_DEFAULT_ON_PULSE_MS 222
 
 static VOID
 AW8624HapticsSleepMs(

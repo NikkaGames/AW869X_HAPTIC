@@ -24,7 +24,7 @@ constexpr wchar_t kQuery[] = L"*";
 constexpr DWORD kNotificationDebounceMs = 4000;
 constexpr DWORD kSubscriptionRetryMs = 5000;
 constexpr ULONG kNotificationIntensity = 50;
-constexpr DWORD kPulseOnMs = 350;
+constexpr DWORD kPulseOnMs = 222;
 constexpr LONGLONG kMaxLogSizeBytes = 300 * 1024;
 
 SERVICE_STATUS g_serviceStatus = {};
@@ -240,6 +240,13 @@ bool SendHwnState(HWN_STATE state, ULONG intensity)
             &bytesReturned,
             nullptr)) {
         const DWORD error = GetLastError();
+        if (state == HWN_ON && error == ERROR_GEN_FAILURE) {
+            Log(L"haptic-bridge: treating IOCTL_HWN_SET_STATE state=%lu intensity=%lu error=%lu as driver-managed success",
+                (ULONG)state,
+                intensity,
+                error);
+            return true;
+        }
         Log(L"haptic-bridge: IOCTL_HWN_SET_STATE failed state=%lu intensity=%lu error=%lu", (ULONG)state, intensity, error);
         CloseHwnHandle();
         return false;
@@ -254,12 +261,7 @@ bool TriggerNotificationPulse()
     if (!SendHwnState(HWN_ON, kNotificationIntensity)) {
         return false;
     }
-    Sleep(kPulseOnMs);
-    if (!SendHwnState(HWN_OFF, 0)) {
-        return false;
-    }
-
-    Log(L"haptic-bridge: notification pulse sent onMs=%lu intensity=%lu",
+    Log(L"haptic-bridge: notification pulse sent driverManagedOnMs=%lu intensity=%lu",
         (ULONG)kPulseOnMs,
         kNotificationIntensity);
     return true;
