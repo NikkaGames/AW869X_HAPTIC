@@ -21,18 +21,17 @@ namespace {
 constexpr wchar_t kServiceName[] = L"AW869XNotifySvc";
 constexpr wchar_t kServiceDisplayName[] = L"AW869X Notification Service";
 constexpr wchar_t kQuery[] = L"*";
-constexpr DWORD kNotificationDebounceMs = 1500;
+constexpr DWORD kNotificationDebounceMs = 4000;
 constexpr DWORD kSubscriptionRetryMs = 5000;
 constexpr ULONG kNotificationIntensity = 50;
-constexpr ULONG kNotificationPeriodMs = 120;
-constexpr ULONG kNotificationDutyCycle = 100;
-constexpr ULONG kNotificationCycles = 1;
+constexpr DWORD kPulseOnMs = 250;
+constexpr DWORD kPulseOffMs = 150;
+constexpr ULONG kPulseCount = 3;
 
 SERVICE_STATUS g_serviceStatus = {};
 SERVICE_STATUS_HANDLE g_serviceStatusHandle = nullptr;
 HANDLE g_stopEvent = nullptr;
 EVT_HANDLE g_subscriptionPush = nullptr;
-EVT_HANDLE g_subscriptionShell = nullptr;
 HANDLE g_hwnHandle = INVALID_HANDLE_VALUE;
 volatile ULONGLONG g_lastPulseTick = 0;
 WCHAR g_logPath[MAX_PATH] = {};
@@ -51,6 +50,8 @@ void Log(const wchar_t* fmt, ...)
     va_list args;
     HANDLE file = INVALID_HANDLE_VALUE;
     DWORD bytesWritten = 0;
+    int utf8Bytes = 0;
+    std::vector<char> utf8;
     SYSTEMTIME st = {};
 
     GetLocalTime(&st);
@@ -82,7 +83,13 @@ void Log(const wchar_t* fmt, ...)
         FILE_ATTRIBUTE_NORMAL,
         nullptr);
     if (file != INVALID_HANDLE_VALUE) {
-        WriteFile(file, line, (DWORD)(wcslen(line) * sizeof(WCHAR)), &bytesWritten, nullptr);
+        utf8Bytes = WideCharToMultiByte(CP_UTF8, 0, line, -1, nullptr, 0, nullptr, nullptr);
+        if (utf8Bytes > 1) {
+            utf8.resize((size_t)utf8Bytes);
+            if (WideCharToMultiByte(CP_UTF8, 0, line, -1, utf8.data(), utf8Bytes, nullptr, nullptr) > 0) {
+                WriteFile(file, utf8.data(), (DWORD)strlen(utf8.data()), &bytesWritten, nullptr);
+            }
+        }
         CloseHandle(file);
     }
 }
@@ -199,7 +206,7 @@ bool EnsureHwnHandle()
     return false;
 }
 
-bool TriggerNotificationPulse()
+bool SendHwnState(HWN_STATE state, ULONG intensity)
 {
     DWORD bytesReturned = 0;
     HWN_SET_PACKET_ONE packet = {};
@@ -213,11 +220,8 @@ bool TriggerNotificationPulse()
     packet.HwNRequests = 1;
     packet.HwNSettingsInfo[0].HwNId = 0;
     packet.HwNSettingsInfo[0].HwNType = HWN_VIBRATOR;
-    packet.HwNSettingsInfo[0].HwNSettings[HWN_INTENSITY] = kNotificationIntensity;
-    packet.HwNSettingsInfo[0].HwNSettings[HWN_PERIOD] = kNotificationPeriodMs;
-    packet.HwNSettingsInfo[0].HwNSettings[HWN_DUTY_CYCLE] = kNotificationDutyCycle;
-    packet.HwNSettingsInfo[0].HwNSettings[HWN_CYCLE_COUNT] = kNotificationCycles;
-    packet.HwNSettingsInfo[0].OffOnBlink = HWN_BLINK;
+    packet.HwNSettingsInfo[0].HwNSettings[HWN_INTENSITY] = intensity;
+    packet.HwNSettingsInfo[0].OffOnBlink = state;
 
     if (!DeviceIoControl(
             g_hwnHandle,
@@ -229,12 +233,34 @@ bool TriggerNotificationPulse()
             &bytesReturned,
             nullptr)) {
         const DWORD error = GetLastError();
-        Log(L"haptic-bridge: IOCTL_HWN_SET_STATE failed, error=%lu", error);
+        Log(L"haptic-bridge: IOCTL_HWN_SET_STATE failed state=%lu intensity=%lu error=%lu", (ULONG)state, intensity, error);
         CloseHwnHandle();
         return false;
     }
 
-    Log(L"haptic-bridge: notification pulse sent");
+    Log(L"haptic-bridge: state sent state=%lu intensity=%lu", (ULONG)state, intensity);
+    return true;
+}
+
+bool TriggerNotificationPulse()
+{
+    for (ULONG i = 0; i < kPulseCount; ++i) {
+        if (!SendHwnState(HWN_ON, kNotificationIntensity)) {
+            return false;
+        }
+        Sleep(kPulseOnMs);
+        if (!SendHwnState(HWN_OFF, 0)) {
+            return false;
+        }
+        if (i + 1 < kPulseCount) {
+            Sleep(kPulseOffMs);
+        }
+    }
+
+    Log(L"haptic-bridge: notification pattern sent count=%lu onMs=%lu offMs=%lu",
+        kPulseCount,
+        (ULONG)kPulseOnMs,
+        (ULONG)kPulseOffMs);
     return true;
 }
 
@@ -269,6 +295,14 @@ DWORD WINAPI EventCallback(EVT_SUBSCRIBE_NOTIFY_ACTION action, PVOID, EVT_HANDLE
 
     if (eventHandle != nullptr && RenderEventXml(eventHandle, xml)) {
         Log(L"haptic-bridge: event=%s", xml.c_str());
+        if (xml.find(L"<Task>10</Task>") == std::wstring::npos &&
+            xml.find(L"<Task>18</Task>") == std::wstring::npos &&
+            xml.find(L"<Task>22</Task>") == std::wstring::npos) {
+            if (eventHandle != nullptr) {
+                EvtClose(eventHandle);
+            }
+            return ERROR_SUCCESS;
+        }
     }
 
     const ULONGLONG now = GetTickCount64();
@@ -292,9 +326,9 @@ bool StartSubscriptionForChannel(const wchar_t* channelPath, EVT_HANDLE* subscri
 {
     *subscriptionHandle = EvtSubscribe(
         nullptr,
-        g_stopEvent,
+        nullptr,
         channelPath,
-        kQuery,
+        nullptr,
         nullptr,
         nullptr,
         reinterpret_cast<EVT_SUBSCRIBE_CALLBACK>(EventCallback),
@@ -311,11 +345,7 @@ bool StartSubscriptionForChannel(const wchar_t* channelPath, EVT_HANDLE* subscri
 
 bool StartSubscriptions()
 {
-    bool any = false;
-
-    any = StartSubscriptionForChannel(L"Microsoft-Windows-PushNotification-Platform/Operational", &g_subscriptionPush) || any;
-    any = StartSubscriptionForChannel(L"Microsoft-Windows-Shell-Core/ActionCenter", &g_subscriptionShell) || any;
-    return any;
+    return StartSubscriptionForChannel(L"Microsoft-Windows-PushNotification-Platform/Operational", &g_subscriptionPush);
 }
 
 void StopSubscriptions()
@@ -323,10 +353,6 @@ void StopSubscriptions()
     if (g_subscriptionPush != nullptr) {
         EvtClose(g_subscriptionPush);
         g_subscriptionPush = nullptr;
-    }
-    if (g_subscriptionShell != nullptr) {
-        EvtClose(g_subscriptionShell);
-        g_subscriptionShell = nullptr;
     }
 }
 
