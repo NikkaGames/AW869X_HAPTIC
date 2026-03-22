@@ -25,6 +25,7 @@ constexpr DWORD kNotificationDebounceMs = 4000;
 constexpr DWORD kSubscriptionRetryMs = 5000;
 constexpr ULONG kNotificationIntensity = 50;
 constexpr DWORD kPulseOnMs = 350;
+constexpr LONGLONG kMaxLogSizeBytes = 300 * 1024;
 
 SERVICE_STATUS g_serviceStatus = {};
 SERVICE_STATUS_HANDLE g_serviceStatusHandle = nullptr;
@@ -51,6 +52,8 @@ void Log(const wchar_t* fmt, ...)
     int utf8Bytes = 0;
     std::vector<char> utf8;
     SYSTEMTIME st = {};
+    LARGE_INTEGER fileSize = {};
+    LARGE_INTEGER zero = {};
 
     GetLocalTime(&st);
     va_start(args, fmt);
@@ -74,17 +77,23 @@ void Log(const wchar_t* fmt, ...)
     }
     file = CreateFileW(
         g_logPath,
-        FILE_APPEND_DATA,
+        GENERIC_READ | GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
         nullptr,
         OPEN_ALWAYS,
         FILE_ATTRIBUTE_NORMAL,
         nullptr);
     if (file != INVALID_HANDLE_VALUE) {
+        if (GetFileSizeEx(file, &fileSize) && fileSize.QuadPart >= kMaxLogSizeBytes) {
+            SetFilePointerEx(file, zero, nullptr, FILE_BEGIN);
+            SetEndOfFile(file);
+        }
+
         utf8Bytes = WideCharToMultiByte(CP_UTF8, 0, line, -1, nullptr, 0, nullptr, nullptr);
         if (utf8Bytes > 1) {
             utf8.resize((size_t)utf8Bytes);
             if (WideCharToMultiByte(CP_UTF8, 0, line, -1, utf8.data(), utf8Bytes, nullptr, nullptr) > 0) {
+                SetFilePointerEx(file, zero, nullptr, FILE_END);
                 WriteFile(file, utf8.data(), (DWORD)strlen(utf8.data()), &bytesWritten, nullptr);
             }
         }
