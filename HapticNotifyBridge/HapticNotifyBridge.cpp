@@ -22,6 +22,7 @@ constexpr wchar_t kServiceDisplayName[] = L"AW869X Notification Service";
 constexpr wchar_t kChannelPath[] = L"Microsoft-Windows-PushNotification-Platform/Operational";
 constexpr wchar_t kQuery[] = L"*";
 constexpr DWORD kNotificationDebounceMs = 1500;
+constexpr DWORD kSubscriptionRetryMs = 5000;
 constexpr ULONG kNotificationIntensity = 50;
 constexpr ULONG kNotificationPeriodMs = 120;
 constexpr ULONG kNotificationDutyCycle = 100;
@@ -265,11 +266,17 @@ void RunWorker()
     }
 
     EnsureHwnHandle();
-    if (!StartSubscription()) {
-        SetEvent(g_stopEvent);
-    }
+    while (WaitForSingleObject(g_stopEvent, 0) != WAIT_OBJECT_0) {
+        if (StartSubscription()) {
+            WaitForSingleObject(g_stopEvent, INFINITE);
+            break;
+        }
 
-    WaitForSingleObject(g_stopEvent, INFINITE);
+        Log(L"haptic-bridge: subscription retry in %lu ms", kSubscriptionRetryMs);
+        if (WaitForSingleObject(g_stopEvent, kSubscriptionRetryMs) == WAIT_OBJECT_0) {
+            break;
+        }
+    }
 
     StopSubscription();
     CloseHwnHandle();
@@ -380,6 +387,11 @@ int wmain(int argc, wchar_t** argv)
     };
 
     if (!StartServiceCtrlDispatcherW(dispatchTable)) {
+        const DWORD error = GetLastError();
+        if (error == ERROR_FAILED_SERVICE_CONTROLLER_CONNECT) {
+            RunWorker();
+            return 0;
+        }
         return 1;
     }
 
