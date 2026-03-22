@@ -94,6 +94,19 @@ Return Value:
 		return status;
 	}
 
+	status = WdfDeviceCreateDeviceInterface(
+		device,
+		(LPGUID)&HWN_DEVINTERFACE,
+		NULL
+	);
+
+	if (!NT_SUCCESS(status)) {
+#ifdef DEBUG
+		Trace(TRACE_LEVEL_ERROR, TRACE_DRIVER, "WdfDeviceCreateDeviceInterface(HWN_DEVINTERFACE) failed %!STATUS!", status);
+#endif
+		return status;
+	}
+
 	devContext = DeviceGetContext(device);
 	if (devContext != NULL)
 	{
