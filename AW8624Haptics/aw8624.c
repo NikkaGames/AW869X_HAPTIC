@@ -812,6 +812,7 @@ AW8624Start(
 )
 {
     NTSTATUS Status;
+    BOOLEAN TimerArmed = FALSE;
 
     if (DevContext == NULL) {
         return STATUS_INVALID_PARAMETER;
@@ -824,12 +825,21 @@ AW8624Start(
         }
     }
 
+    if (DevContext->BlinkTimer != NULL) {
+        WdfTimerStop(DevContext->BlinkTimer, FALSE);
+    }
+
     Status = AW8624VibrateUntilStopped(DevContext, 50);
+    if (NT_SUCCESS(Status) && DevContext->BlinkTimer != NULL) {
+        TimerArmed = WdfTimerStart(DevContext->BlinkTimer, WDF_REL_TIMEOUT_IN_MS(500));
+    }
 
 #ifdef DEBUG
     Trace(TRACE_LEVEL_INFORMATION, TRACE_HAPTICS,
-        "%!FUNC!: start-intensity=%lu family=%lu chipId=0x%04X status=%!STATUS!",
+        "%!FUNC!: start-intensity=%lu durationMs=%lu timerArmed=%lu family=%lu chipId=0x%04X status=%!STATUS!",
         50UL,
+        500UL,
+        TimerArmed ? 1UL : 0UL,
         (ULONG)DevContext->Family,
         DevContext->ChipId,
         Status);
