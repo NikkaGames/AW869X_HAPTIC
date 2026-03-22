@@ -81,6 +81,23 @@ static VOID AwSleepUs(ULONG Microseconds)
     KeStallExecutionProcessor(Microseconds);
 }
 
+static NTSTATUS AwSoftReset(PDEVICE_CONTEXT DevContext)
+{
+    NTSTATUS Status;
+    UCHAR Reset = 0xAA;
+
+    Status = AwWriteByte(DevContext, AW_REG_CHIPID, Reset);
+    if (NT_SUCCESS(Status)) {
+        AwSleepUs(3500);
+    }
+
+#ifdef DEBUG
+    Trace(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC!: status=%!STATUS!", Status);
+#endif
+
+    return Status;
+}
+
 static UCHAR AwScaleU8(UCHAR BaseValue, ULONG Percent)
 {
     ULONG Scaled;
@@ -712,16 +729,32 @@ AW8624VibrateUntilStopped(
 
     switch (DevContext->Family) {
     case AwHapticFamily8692x:
-        return Aw8692xPlayContinuous(DevContext, Intensity);
+        Status = Aw8692xPlayContinuous(DevContext, Intensity);
+        break;
     case AwHapticFamily8671x:
-        return Aw8671xPlayContinuous(DevContext, Intensity);
+        Status = Aw8671xPlayContinuous(DevContext, Intensity);
+        break;
     case AwHapticFamily869xx:
-        return Aw869xxPlayContinuous(DevContext, Intensity);
+        Status = Aw869xxPlayContinuous(DevContext, Intensity);
+        break;
     case AwHapticFamily869x:
-        return Aw869xPlayContinuous(DevContext, Intensity);
+        Status = Aw869xPlayContinuous(DevContext, Intensity);
+        break;
     default:
-        return STATUS_DEVICE_NOT_READY;
+        Status = STATUS_DEVICE_NOT_READY;
+        break;
     }
+
+#ifdef DEBUG
+    Trace(TRACE_LEVEL_INFORMATION, TRACE_HAPTICS,
+        "%!FUNC!: intensity=%lu family=%lu chipId=0x%04X status=%!STATUS!",
+        Intensity,
+        (ULONG)DevContext->Family,
+        DevContext->ChipId,
+        Status);
+#endif
+
+    return Status;
 }
 
 NTSTATUS
@@ -745,12 +778,41 @@ AW8624Initialize(
 
     Status = AwReadChipId(DevContext);
     if (!NT_SUCCESS(Status)) {
+#ifdef DEBUG
+        Trace(TRACE_LEVEL_ERROR, TRACE_DRIVER, "%!FUNC!: AwReadChipId failed %!STATUS!", Status);
+#endif
+        return Status;
+    }
+
+#ifdef DEBUG
+    Trace(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
+        "%!FUNC!: detected chipId=0x%04X family=%lu before reset",
+        DevContext->ChipId,
+        (ULONG)DevContext->Family);
+#endif
+
+    Status = AwSoftReset(DevContext);
+    if (!NT_SUCCESS(Status)) {
+#ifdef DEBUG
+        Trace(TRACE_LEVEL_ERROR, TRACE_DRIVER, "%!FUNC!: AwSoftReset failed %!STATUS!", Status);
+#endif
+        return Status;
+    }
+
+    Status = AwReadChipId(DevContext);
+    if (!NT_SUCCESS(Status)) {
+#ifdef DEBUG
+        Trace(TRACE_LEVEL_ERROR, TRACE_DRIVER, "%!FUNC!: chip re-read failed %!STATUS!", Status);
+#endif
         return Status;
     }
 
     AwLoadNx729jLeftSettings(DevContext);
     Status = AwDoInitializeFamily(DevContext);
     if (!NT_SUCCESS(Status)) {
+#ifdef DEBUG
+        Trace(TRACE_LEVEL_ERROR, TRACE_DRIVER, "%!FUNC!: AwDoInitializeFamily failed %!STATUS!", Status);
+#endif
         return Status;
     }
 
