@@ -320,6 +320,11 @@ AW8624HapticsStopDevice(
 	}
 #endif
 
+	if (devContext->BlinkTimer != NULL)
+	{
+		WdfTimerStop(devContext->BlinkTimer, FALSE);
+	}
+
 	status = AW8624Stop(devContext);
 
 #ifdef DEBUG
@@ -388,6 +393,19 @@ AW8624HapticsSetState(
 
 	for (i = 0; i < NumberOfHwnDevicesInBuffer; i++)
 	{
+#ifdef DEBUG
+		Trace(
+			TRACE_LEVEL_INFORMATION,
+			TRACE_HAPTICS,
+			"%!FUNC!: hwnId=%lu state=%lu intensity=%lu period=%lu duty=%lu cycles=%lu",
+			hwnHeader->HwNSettingsInfo[i].HwNId,
+			(ULONG)hwnHeader->HwNSettingsInfo[i].OffOnBlink,
+			hwnHeader->HwNSettingsInfo[i].HwNSettings[HWN_INTENSITY],
+			hwnHeader->HwNSettingsInfo[i].HwNSettings[HWN_PERIOD],
+			hwnHeader->HwNSettingsInfo[i].HwNSettings[HWN_DUTY_CYCLE],
+			hwnHeader->HwNSettingsInfo[i].HwNSettings[HWN_CYCLE_COUNT]);
+#endif
+
 		// Set device settings here
 		status = AW8624HapticsSetDevice(Context, &(hwnHeader->HwNSettingsInfo[i]));
 		if (!NT_SUCCESS(status))
@@ -415,6 +433,40 @@ exit:
 #endif
 
 	return status;
+}
+
+VOID
+AW8624HapticsBlinkTimerFunc(
+	WDFTIMER Timer
+)
+{
+	WDFDEVICE device;
+	PDEVICE_CONTEXT devContext;
+	NTSTATUS status;
+
+	device = (WDFDEVICE)WdfTimerGetParentObject(Timer);
+	if (device == NULL)
+	{
+		return;
+	}
+
+	devContext = DeviceGetContext(device);
+	if (devContext == NULL)
+	{
+		return;
+	}
+
+	status = AW8624Stop(devContext);
+	if (NT_SUCCESS(status) && devContext->CurrentStates != NULL)
+	{
+		devContext->CurrentStates->CurrentState.OffOnBlink = HWN_OFF;
+		devContext->CurrentStates->CurrentState.HwNSettings[HWN_INTENSITY] = 0;
+	}
+	devContext->PreviousState = HWN_OFF;
+
+#ifdef DEBUG
+	Trace(TRACE_LEVEL_INFORMATION, TRACE_HAPTICS, "%!FUNC!: status=%!STATUS!", status);
+#endif
 }
 
 NTSTATUS

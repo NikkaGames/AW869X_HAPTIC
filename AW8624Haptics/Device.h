@@ -49,6 +49,7 @@ typedef struct _DEVICE_CONTEXT
 	// Interrupt servicing
 	//
 	WDFINTERRUPT InterruptObject;
+	WDFTIMER BlinkTimer;
 	BOOLEAN InterruptPresent;
 
 	//

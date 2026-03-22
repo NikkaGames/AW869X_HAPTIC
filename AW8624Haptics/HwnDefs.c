@@ -26,32 +26,119 @@ Environment:
 NTSTATUS
 AW8624HapticsToggleVibrationMotor(
 	PDEVICE_CONTEXT devContext,
-	HWN_STATE hwnState,
-	ULONG* hwnIntensity
+	PHWN_SETTINGS hwnSettings
 )
 {
+	NTSTATUS status = STATUS_SUCCESS;
+	ULONG intensity = 0;
+	ULONG periodMs = 0;
+	ULONG dutyCycle = 0;
+	ULONG cycleCount = 0;
+	ULONG pulseMs = 0;
+	HWN_STATE hwnState;
+
 #ifdef DEBUG
 	Trace(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC! Entry");
 #endif
 
-	//UNREFERENCED_PARAMETER(hwnIntensity);
+	if (devContext == NULL || hwnSettings == NULL)
+	{
+		return STATUS_INVALID_PARAMETER;
+	}
+
+	if (devContext->BlinkTimer != NULL)
+	{
+		WdfTimerStop(devContext->BlinkTimer, FALSE);
+	}
+
+	hwnState = hwnSettings->OffOnBlink;
+	intensity = hwnSettings->HwNSettings[HWN_INTENSITY];
+
+	if (hwnState != HWN_OFF && intensity == 0)
+	{
+		intensity = 30;
+	}
 
 	switch (hwnState) {
 	case HWN_OFF:
 	{
-		return AW8624Stop(devContext);
+		status = AW8624Stop(devContext);
 		break;
 	}
 	case HWN_ON:
 	{
-		return AW8624VibrateUntilStopped(devContext, *hwnIntensity);
+		status = AW8624VibrateUntilStopped(devContext, intensity);
+		break;
+	}
+	case HWN_BLINK:
+	{
+		periodMs = hwnSettings->HwNSettings[HWN_PERIOD];
+		dutyCycle = hwnSettings->HwNSettings[HWN_DUTY_CYCLE];
+		cycleCount = hwnSettings->HwNSettings[HWN_CYCLE_COUNT];
+
+		if (periodMs == 0)
+		{
+			periodMs = 120;
+		}
+		if (dutyCycle == 0 || dutyCycle > 100)
+		{
+			dutyCycle = 50;
+		}
+		if (cycleCount == 0)
+		{
+			cycleCount = 1;
+		}
+
+		pulseMs = (periodMs * dutyCycle * cycleCount) / 100;
+		if (pulseMs < 20)
+		{
+			pulseMs = 20;
+		}
+		if (pulseMs > 5000)
+		{
+			pulseMs = 5000;
+		}
+
+		status = AW8624VibrateUntilStopped(devContext, intensity);
+		if (NT_SUCCESS(status) && devContext->BlinkTimer != NULL)
+		{
+			if (!WdfTimerStart(devContext->BlinkTimer, WDF_REL_TIMEOUT_IN_MS(pulseMs)))
+			{
+#ifdef DEBUG
+				Trace(
+					TRACE_LEVEL_WARNING,
+					TRACE_HAPTICS,
+					"%!FUNC!: timer already queued pulseMs=%lu intensity=%lu",
+					pulseMs,
+					intensity);
+#endif
+			}
+		}
 		break;
 	}
 	default:
 	{
-		return STATUS_NOT_IMPLEMENTED;
+		status = STATUS_NOT_IMPLEMENTED;
+		break;
 	}
 	}
+
+#ifdef DEBUG
+	Trace(
+		TRACE_LEVEL_INFORMATION,
+		TRACE_HAPTICS,
+		"%!FUNC!: state=%lu intensity=%lu period=%lu duty=%lu cycles=%lu pulseMs=%lu status=%!STATUS!",
+		(ULONG)hwnState,
+		intensity,
+		periodMs,
+		dutyCycle,
+		cycleCount,
+		pulseMs,
+		status);
+#endif
+
+	devContext->PreviousState = hwnState;
+	return status;
 }
 
 NTSTATUS
@@ -81,8 +168,7 @@ AW8624HapticsSetDevice(
 	{
 		Status = AW8624HapticsToggleVibrationMotor(
 			devContext,
-			hwnSettings->OffOnBlink,
-			&(hwnSettings->HwNSettings[HWN_INTENSITY])
+			hwnSettings
 		);
 	}
 

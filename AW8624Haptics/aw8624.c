@@ -762,7 +762,7 @@ AW8624Start(
     PDEVICE_CONTEXT DevContext
 )
 {
-    return AW8624VibrateUntilStopped(DevContext, 50);
+    return AW8624VibrateUntilStopped(DevContext, 15);
 }
 
 NTSTATUS

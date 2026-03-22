@@ -47,7 +47,9 @@ Return Value:
 --*/
 {
 	WDF_OBJECT_ATTRIBUTES deviceAttributes;
+	WDF_OBJECT_ATTRIBUTES timerAttributes;
 	WDFDEVICE device;
+	WDF_TIMER_CONFIG timerConfig;
 	NTSTATUS status;
 	PDEVICE_CONTEXT devContext;
 
@@ -96,6 +98,22 @@ Return Value:
 	if (devContext != NULL)
 	{
 		devContext->Device = device;
+
+		WDF_TIMER_CONFIG_INIT(&timerConfig, AW8624HapticsBlinkTimerFunc);
+		timerConfig.AutomaticSerialization = FALSE;
+
+		WDF_OBJECT_ATTRIBUTES_INIT(&timerAttributes);
+		timerAttributes.ParentObject = device;
+		timerAttributes.ExecutionLevel = WdfExecutionLevelPassive;
+
+		status = WdfTimerCreate(&timerConfig, &timerAttributes, &devContext->BlinkTimer);
+		if (!NT_SUCCESS(status))
+		{
+#ifdef DEBUG
+			Trace(TRACE_LEVEL_ERROR, TRACE_DRIVER, "WdfTimerCreate failed %!STATUS!", status);
+#endif
+			return status;
+		}
 	}
 
 	return status;
