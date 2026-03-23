@@ -31,7 +31,7 @@
 #define AW_UNUSED(x) (void)(x)
 #define AW8692X_RAM_FIRMWARE_BASEADDR_SHIFT 2
 #define AW8692X_RAM_FIRMWARE_DATA_SHIFT 4
-#define AW8692X_RAMDATA_WRITE_CHUNK 128
+#define AW8692X_RAMDATA_WRITE_CHUNK 16
 
 #define AW8692X_BASEADDR_H(base_addr) ((UCHAR)(((base_addr) >> 8) & 0x1F))
 #define AW8692X_BASEADDR_L(base_addr) ((UCHAR)((base_addr) & 0x00FF))
@@ -608,6 +608,7 @@ static NTSTATUS Aw8692xLoadRamFirmware(PDEVICE_CONTEXT DevContext)
         }
 
         Offset += ChunkLength;
+        AwSleepUs(200);
     }
 
     DevContext->RamFirmwareLoaded = TRUE;
@@ -921,7 +922,13 @@ static NTSTATUS Aw8692xPlayClicky(PDEVICE_CONTEXT DevContext, ULONG Intensity, U
     if (!DevContext->RamFirmwareLoaded) {
         Status = Aw8692xLoadRamFirmware(DevContext);
         if (!NT_SUCCESS(Status)) {
-            return Status;
+#ifdef DEBUG
+            Trace(
+                TRACE_LEVEL_WARNING,
+                TRACE_HAPTICS,
+                "%!FUNC!: RAM firmware load failed, falling back status=%!STATUS!",
+                Status);
+#endif
         }
     }
 
@@ -1305,9 +1312,9 @@ AW8624Initialize(
         Status = Aw8692xLoadRamFirmware(DevContext);
         if (!NT_SUCCESS(Status)) {
 #ifdef DEBUG
-            Trace(TRACE_LEVEL_ERROR, TRACE_DRIVER, "%!FUNC!: Aw8692xLoadRamFirmware failed %!STATUS!", Status);
+            Trace(TRACE_LEVEL_WARNING, TRACE_DRIVER, "%!FUNC!: Aw8692xLoadRamFirmware failed, continuing without RAM firmware %!STATUS!", Status);
 #endif
-            return Status;
+            Status = STATUS_SUCCESS;
         }
     }
 
