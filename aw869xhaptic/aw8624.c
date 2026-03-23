@@ -22,12 +22,25 @@
 #include "Driver.h"
 #include "Controller.h"
 #include "aw8624.h"
+#include "aw8692x_haptic_ram_fw.h"
 
 #ifdef DEBUG
 #include "aw8624.tmh"
 #endif
 
 #define AW_UNUSED(x) (void)(x)
+#define AW8692X_RAM_FIRMWARE_BASEADDR_SHIFT 2
+#define AW8692X_RAM_FIRMWARE_DATA_SHIFT 4
+#define AW8692X_RAMDATA_WRITE_CHUNK 128
+
+#define AW8692X_BASEADDR_H(base_addr) ((UCHAR)(((base_addr) >> 8) & 0x1F))
+#define AW8692X_BASEADDR_L(base_addr) ((UCHAR)((base_addr) & 0x00FF))
+#define AW8692X_RAMADDR_H(base_addr)  ((UCHAR)(((base_addr) >> 8) & 0x1F))
+#define AW8692X_RAMADDR_L(base_addr)  ((UCHAR)((base_addr) & 0x00FF))
+#define AW8692X_FIFO_AE_ADDR_H(base_addr) ((UCHAR)((((base_addr) >> 1) >> 4) & 0xF0))
+#define AW8692X_FIFO_AE_ADDR_L(base_addr) ((UCHAR)(((base_addr) >> 1) & 0x00FF))
+#define AW8692X_FIFO_AF_ADDR_H(base_addr) ((UCHAR)((((base_addr) - ((base_addr) >> 2)) >> 8) & 0x0F))
+#define AW8692X_FIFO_AF_ADDR_L(base_addr) ((UCHAR)(((base_addr) - ((base_addr) >> 2)) & 0x00FF))
 
 static NTSTATUS AwReadBytes(PDEVICE_CONTEXT DevContext, UCHAR Address, PUCHAR Data, ULONG Length)
 {
@@ -470,6 +483,156 @@ static VOID Aw8692xSelectRamWaveform(PDEVICE_CONTEXT DevContext, ULONG DurationM
     }
 }
 
+static USHORT Aw8692xComputeFirmwareChecksum(const UCHAR* Data, ULONG Length)
+{
+    ULONG Index;
+    ULONG Checksum = 0;
+
+    for (Index = AW8692X_RAM_FIRMWARE_BASEADDR_SHIFT; Index < Length; ++Index) {
+        Checksum += Data[Index];
+    }
+
+    return (USHORT)Checksum;
+}
+
+static NTSTATUS Aw8692xRamInit(PDEVICE_CONTEXT DevContext, BOOLEAN Enable)
+{
+    return AwWriteBits(
+        DevContext,
+        AW8692X_REG_SYSCTRL3,
+        (UCHAR)AW8692X_BIT_SYSCTRL3_EN_RAMINIT_MASK,
+        Enable ? AW8692X_BIT_SYSCTRL3_EN_RAMINIT_ON : AW8692X_BIT_SYSCTRL3_EN_RAMINIT_OFF);
+}
+
+static NTSTATUS Aw8692xSetBaseAddr(PDEVICE_CONTEXT DevContext, USHORT BaseAddr)
+{
+    NTSTATUS Status;
+    UCHAR BaseAddrHigh = AW8692X_BASEADDR_H(BaseAddr);
+    UCHAR BaseAddrLow = AW8692X_BASEADDR_L(BaseAddr);
+
+    Status = AwWriteBits(
+        DevContext,
+        AW8692X_REG_RTPCFG1,
+        (UCHAR)AW8692X_BIT_RTPCFG1_BASE_ADDR_H_MASK,
+        BaseAddrHigh);
+    if (!NT_SUCCESS(Status)) {
+        return Status;
+    }
+
+    return AwWriteByte(DevContext, AW8692X_REG_RTPCFG2, BaseAddrLow);
+}
+
+static NTSTATUS Aw8692xSetRamAddr(PDEVICE_CONTEXT DevContext, USHORT BaseAddr)
+{
+    UCHAR RamAddr[2];
+
+    RamAddr[0] = AW8692X_RAMADDR_H(BaseAddr);
+    RamAddr[1] = AW8692X_RAMADDR_L(BaseAddr);
+
+    return AwWriteBytes(DevContext, AW8692X_REG_RAMADDRH, RamAddr, sizeof(RamAddr));
+}
+
+static NTSTATUS Aw8692xLoadRamFirmware(PDEVICE_CONTEXT DevContext)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+    const UCHAR* Firmware = g_Aw8692xHapticRamFirmware;
+    const ULONG FirmwareSize = AW8692X_HAPTIC_RAM_FIRMWARE_SIZE;
+    ULONG Offset;
+    USHORT BaseAddr;
+    USHORT ExpectedChecksum;
+    USHORT ActualChecksum;
+    UCHAR FifoConfig[3];
+
+    if (DevContext->RamFirmwareLoaded) {
+        return STATUS_SUCCESS;
+    }
+
+    if (FirmwareSize < AW8692X_RAM_FIRMWARE_DATA_SHIFT) {
+        return STATUS_INVALID_BUFFER_SIZE;
+    }
+
+    ExpectedChecksum = (USHORT)(((USHORT)Firmware[0] << 8) | Firmware[1]);
+    ActualChecksum = Aw8692xComputeFirmwareChecksum(Firmware, FirmwareSize);
+    if (ExpectedChecksum != ActualChecksum) {
+#ifdef DEBUG
+        Trace(
+            TRACE_LEVEL_ERROR,
+            TRACE_DRIVER,
+            "%!FUNC!: checksum mismatch expected=0x%04X actual=0x%04X",
+            ExpectedChecksum,
+            ActualChecksum);
+#endif
+        return STATUS_CRC_ERROR;
+    }
+
+    BaseAddr = (USHORT)(((USHORT)Firmware[2] << 8) | Firmware[3]);
+
+    Status = Aw8692xRamInit(DevContext, TRUE);
+    if (!NT_SUCCESS(Status)) {
+        return Status;
+    }
+
+    Status = AW8624Stop(DevContext);
+    if (!NT_SUCCESS(Status)) {
+        goto Exit;
+    }
+
+    FifoConfig[0] = (UCHAR)(AW8692X_FIFO_AE_ADDR_H(BaseAddr) | AW8692X_FIFO_AF_ADDR_H(BaseAddr));
+    FifoConfig[1] = AW8692X_FIFO_AE_ADDR_L(BaseAddr);
+    FifoConfig[2] = AW8692X_FIFO_AF_ADDR_L(BaseAddr);
+
+    Status = AwWriteBytes(DevContext, AW8692X_REG_RTPCFG3, FifoConfig, sizeof(FifoConfig));
+    if (!NT_SUCCESS(Status)) {
+        goto Exit;
+    }
+
+    Status = Aw8692xSetBaseAddr(DevContext, BaseAddr);
+    if (!NT_SUCCESS(Status)) {
+        goto Exit;
+    }
+
+    Status = Aw8692xSetRamAddr(DevContext, BaseAddr);
+    if (!NT_SUCCESS(Status)) {
+        goto Exit;
+    }
+
+    for (Offset = AW8692X_RAM_FIRMWARE_DATA_SHIFT; Offset < FirmwareSize;) {
+        ULONG ChunkLength = FirmwareSize - Offset;
+        if (ChunkLength > AW8692X_RAMDATA_WRITE_CHUNK) {
+            ChunkLength = AW8692X_RAMDATA_WRITE_CHUNK;
+        }
+
+        Status = AwWriteBytes(DevContext, AW8692X_REG_RAMDATA, &Firmware[Offset], ChunkLength);
+        if (!NT_SUCCESS(Status)) {
+            goto Exit;
+        }
+
+        Offset += ChunkLength;
+    }
+
+    DevContext->RamFirmwareLoaded = TRUE;
+
+#ifdef DEBUG
+    Trace(
+        TRACE_LEVEL_INFORMATION,
+        TRACE_DRIVER,
+        "%!FUNC!: loaded checksum=0x%04X baseAddr=0x%04X payload=%lu",
+        ActualChecksum,
+        BaseAddr,
+        (ULONG)(FirmwareSize - AW8692X_RAM_FIRMWARE_DATA_SHIFT));
+#endif
+
+Exit:
+    {
+        NTSTATUS RamInitStatus = Aw8692xRamInit(DevContext, FALSE);
+        if (NT_SUCCESS(Status) && !NT_SUCCESS(RamInitStatus)) {
+            Status = RamInitStatus;
+        }
+    }
+
+    return Status;
+}
+
 static NTSTATUS Aw8692xMiscInit(PDEVICE_CONTEXT DevContext)
 {
     NTSTATUS Status;
@@ -754,6 +917,13 @@ static NTSTATUS Aw8692xPlayClicky(PDEVICE_CONTEXT DevContext, ULONG Intensity, U
     AW_UNUSED(Intensity);
 
     Aw8692xSelectRamWaveform(DevContext, DurationMs, &WaveSeq, &WaveLoop);
+
+    if (!DevContext->RamFirmwareLoaded) {
+        Status = Aw8692xLoadRamFirmware(DevContext);
+        if (!NT_SUCCESS(Status)) {
+            return Status;
+        }
+    }
 
 #ifdef DEBUG
     Trace(TRACE_LEVEL_INFORMATION, TRACE_HAPTICS,
@@ -1097,6 +1267,8 @@ AW8624Initialize(
         return Status;
     }
 
+    DevContext->RamFirmwareLoaded = FALSE;
+
 #ifdef DEBUG
     Trace(TRACE_LEVEL_INFORMATION, TRACE_DRIVER,
         "%!FUNC!: detected chipId=0x%04X family=%lu before reset",
@@ -1127,6 +1299,16 @@ AW8624Initialize(
         Trace(TRACE_LEVEL_ERROR, TRACE_DRIVER, "%!FUNC!: AwDoInitializeFamily failed %!STATUS!", Status);
 #endif
         return Status;
+    }
+
+    if (DevContext->Family == AwHapticFamily8692x) {
+        Status = Aw8692xLoadRamFirmware(DevContext);
+        if (!NT_SUCCESS(Status)) {
+#ifdef DEBUG
+            Trace(TRACE_LEVEL_ERROR, TRACE_DRIVER, "%!FUNC!: Aw8692xLoadRamFirmware failed %!STATUS!", Status);
+#endif
+            return Status;
+        }
     }
 
     DevContext->HapticsInitialized = TRUE;
