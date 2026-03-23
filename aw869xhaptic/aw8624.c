@@ -424,6 +424,35 @@ static NTSTATUS Aw8692xSetWavLoop(PDEVICE_CONTEXT DevContext, UCHAR Wave, UCHAR 
         Value);
 }
 
+static NTSTATUS Aw8692xUploadTrimLraZero(PDEVICE_CONTEXT DevContext)
+{
+    NTSTATUS Status;
+    UCHAR RegValue;
+
+    RegValue = AW8692X_BIT_TMCFG_TM_UNLOCK;
+    Status = AwWriteByte(DevContext, AW8692X_REG_TMCFG, RegValue);
+    if (!NT_SUCCESS(Status)) {
+        return Status;
+    }
+
+    Status = AwWriteBits(DevContext,
+        AW8692X_REG_ANACFG20,
+        (UCHAR)AW8692X_BIT_ANACFG20_TRIM_LRA_MASK,
+        0);
+
+    RegValue = AW8692X_BIT_TMCFG_TM_LOCK;
+    if (NT_SUCCESS(Status)) {
+        NTSTATUS LockStatus = AwWriteByte(DevContext, AW8692X_REG_TMCFG, RegValue);
+        if (!NT_SUCCESS(LockStatus)) {
+            return LockStatus;
+        }
+        return Status;
+    }
+
+    (void)AwWriteByte(DevContext, AW8692X_REG_TMCFG, RegValue);
+    return Status;
+}
+
 static VOID Aw8692xSelectRamWaveform(PDEVICE_CONTEXT DevContext, ULONG DurationMs, UCHAR* WaveSeq, UCHAR* WaveLoop)
 {
     if (DurationMs <= DevContext->Settings.DurationTime[0]) {
@@ -737,6 +766,8 @@ static NTSTATUS Aw8692xPlayClicky(PDEVICE_CONTEXT DevContext, ULONG Intensity, U
         BstVol);
 #endif
 
+    Status = Aw8692xUploadTrimLraZero(DevContext);
+    if (!NT_SUCCESS(Status)) return Status;
     Status = Aw8692xSetGain(DevContext, Gain);
     if (!NT_SUCCESS(Status)) return Status;
     Status = Aw8692xSetBstVol(DevContext, BstVol);
