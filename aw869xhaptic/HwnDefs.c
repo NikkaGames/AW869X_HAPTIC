@@ -128,7 +128,7 @@ AW869XHapticToggleVibrationMotor(
 			devContext,
 			intensity,
 			(requestedPulseMs != 0) ? requestedPulseMs : pulseMs);
-		if (NT_SUCCESS(status) && !aw8692xClicky)
+		if (NT_SUCCESS(status))
 		{
 			AW869XHapticSleepMs(pulseMs);
 			status = AW8624Stop(devContext);
