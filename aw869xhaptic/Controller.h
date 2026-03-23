@@ -18,6 +18,13 @@ AW8624VibrateUntilStopped(
 );
 
 NTSTATUS
+AW8624PlayPulse(
+	IN PDEVICE_CONTEXT pDevice,
+	IN ULONG Intensity,
+	IN ULONG DurationMs
+);
+
+NTSTATUS
 AW8624Initialize(
 	IN PDEVICE_CONTEXT pDevice
 );

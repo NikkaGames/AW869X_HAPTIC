@@ -62,6 +62,7 @@ typedef struct _AW_HAPTIC_SETTINGS
     UCHAR F0CaliPercent;
     UCHAR MaxBstVol;
     UCHAR BstVolDefault;
+    UCHAR BstVolRam;
     UCHAR D2sGain;
     UCHAR ContDrv1Lvl;
     UCHAR ContDrv2Lvl;
@@ -85,6 +86,7 @@ typedef struct _AW_HAPTIC_SETTINGS
     UCHAR RSpare;
     UCHAR BstDbg[3];
     UCHAR BemfConfig[4];
+    UCHAR DurationTime[3];
     BOOLEAN TrackEnable;
 } AW_HAPTIC_SETTINGS, *PAW_HAPTIC_SETTINGS;
 
@@ -104,6 +106,13 @@ NTSTATUS
 AW8624VibrateUntilStopped(
     _In_ PDEVICE_CONTEXT pDevice,
     _In_ ULONG Intensity
+);
+
+NTSTATUS
+AW8624PlayPulse(
+    _In_ PDEVICE_CONTEXT pDevice,
+    _In_ ULONG Intensity,
+    _In_ ULONG DurationMs
 );
 
 NTSTATUS

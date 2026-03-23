@@ -145,11 +145,15 @@ static VOID AwLoadNx729jLeftSettings(PDEVICE_CONTEXT DevContext)
     DevContext->Settings.Mode = 0x05;
     DevContext->Settings.F0Pre = 0x6A4;
     DevContext->Settings.F0CaliPercent = 0x07;
+    DevContext->Settings.DurationTime[0] = 0x14;
+    DevContext->Settings.DurationTime[1] = 0x1E;
+    DevContext->Settings.DurationTime[2] = 0x3C;
     DevContext->Settings.TrackEnable = TRUE;
 
     switch (DevContext->Family) {
     case AwHapticFamily8692x:
         DevContext->Settings.BstVolDefault = 0x50;
+        DevContext->Settings.BstVolRam = 0x50;
         DevContext->Settings.D2sGain = 0x04;
         DevContext->Settings.ContBrkGain = 0x08;
         DevContext->Settings.ContBstBrkGain = 0x05;
@@ -169,6 +173,7 @@ static VOID AwLoadNx729jLeftSettings(PDEVICE_CONTEXT DevContext)
 
     case AwHapticFamily8671x:
         DevContext->Settings.BstVolDefault = 0x04;
+        DevContext->Settings.BstVolRam = 0x04;
         DevContext->Settings.D2sGain = 0x04;
         DevContext->Settings.ContTrackMargin = 0x12;
         DevContext->Settings.ContDrv2Time = 0x14;
@@ -188,6 +193,7 @@ static VOID AwLoadNx729jLeftSettings(PDEVICE_CONTEXT DevContext)
 
     case AwHapticFamily869xx:
         DevContext->Settings.BstVolDefault = 0x20;
+        DevContext->Settings.BstVolRam = 0x20;
         DevContext->Settings.D2sGain = 0x04;
         DevContext->Settings.ContTrackMargin = 0x12;
         DevContext->Settings.ContDrv2Time = 0x14;
@@ -370,6 +376,47 @@ static NTSTATUS Aw869xSetBstVol(PDEVICE_CONTEXT DevContext, UCHAR BstVol)
     }
     return AwWriteBits(DevContext, AW869X_REG_BSTDBG4,
         (UCHAR)AW869X_BIT_BSTDBG4_BSTVOL_MASK, (UCHAR)(BstVol << 1));
+}
+
+static NTSTATUS Aw8692xSetWavSeq(PDEVICE_CONTEXT DevContext, UCHAR Wave, UCHAR Sequence)
+{
+    return AwWriteByte(DevContext, (UCHAR)(AW8692X_REG_WAVCFG1 + Wave), Sequence);
+}
+
+static NTSTATUS Aw8692xSetWavLoop(PDEVICE_CONTEXT DevContext, UCHAR Wave, UCHAR Loop)
+{
+    UCHAR Value;
+
+    if (Wave & 0x1) {
+        Value = (UCHAR)(Loop << 0);
+        return AwWriteBits(DevContext,
+            (UCHAR)(AW8692X_REG_WAVCFG9 + (Wave / 2)),
+            (UCHAR)AW8692X_BIT_WAVLOOP_SEQ_EVEN_MASK,
+            Value);
+    }
+
+    Value = (UCHAR)(Loop << 4);
+    return AwWriteBits(DevContext,
+        (UCHAR)(AW8692X_REG_WAVCFG9 + (Wave / 2)),
+        (UCHAR)AW8692X_BIT_WAVLOOP_SEQ_ODD_MASK,
+        Value);
+}
+
+static VOID Aw8692xSelectRamWaveform(PDEVICE_CONTEXT DevContext, ULONG DurationMs, UCHAR* WaveSeq, UCHAR* WaveLoop)
+{
+    if (DurationMs < DevContext->Settings.DurationTime[0]) {
+        *WaveSeq = 3;
+        *WaveLoop = 0;
+    } else if (DurationMs < DevContext->Settings.DurationTime[1]) {
+        *WaveSeq = 2;
+        *WaveLoop = 0;
+    } else if (DurationMs < DevContext->Settings.DurationTime[2]) {
+        *WaveSeq = 1;
+        *WaveLoop = 0;
+    } else {
+        *WaveSeq = 4;
+        *WaveLoop = 0x0F;
+    }
 }
 
 static NTSTATUS Aw8692xMiscInit(PDEVICE_CONTEXT DevContext)
@@ -615,6 +662,48 @@ static NTSTATUS Aw8692xPlayContinuous(PDEVICE_CONTEXT DevContext, ULONG Intensit
     return AwWriteByte(DevContext, AW8692X_REG_PLAYCFG4, AW8692X_BIT_PLAYCFG4_GO_ON);
 }
 
+static NTSTATUS Aw8692xPlayClicky(PDEVICE_CONTEXT DevContext, ULONG Intensity, ULONG DurationMs)
+{
+    NTSTATUS Status;
+    UCHAR Gain = AwScaleU8(AW_GAIN_MAX, Intensity);
+    UCHAR BstVol = DevContext->Settings.BstVolRam != 0 ? DevContext->Settings.BstVolRam : DevContext->Settings.BstVolDefault;
+    UCHAR WaveSeq = 0;
+    UCHAR WaveLoop = 0;
+
+    Aw8692xSelectRamWaveform(DevContext, DurationMs, &WaveSeq, &WaveLoop);
+
+#ifdef DEBUG
+    Trace(TRACE_LEVEL_INFORMATION, TRACE_HAPTICS,
+        "%!FUNC!: intensity=%lu durationMs=%lu wavseq=%lu wavloop=%lu gain=0x%02X bst=0x%02X",
+        Intensity,
+        DurationMs,
+        (ULONG)WaveSeq,
+        (ULONG)WaveLoop,
+        Gain,
+        BstVol);
+#endif
+
+    Status = Aw8692xSetGain(DevContext, Gain);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = Aw8692xSetBstVol(DevContext, BstVol);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = Aw8692xSetWavSeq(DevContext, 0, WaveSeq);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = Aw8692xSetWavLoop(DevContext, 0, WaveLoop);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = Aw8692xSetWavSeq(DevContext, 1, 0);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = Aw8692xSetWavLoop(DevContext, 1, 0);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8692X_REG_PLAYCFG3,
+        (UCHAR)AW8692X_BIT_PLAYCFG3_PLAY_MODE_MASK, AW8692X_BIT_PLAYCFG3_PLAY_MODE_RAM);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8692X_REG_PLAYCFG1,
+        (UCHAR)AW8692X_BIT_PLAYCFG1_BST_MODE_MASK, AW8692X_BIT_PLAYCFG1_BST_MODE);
+    if (!NT_SUCCESS(Status)) return Status;
+    return AwWriteByte(DevContext, AW8692X_REG_PLAYCFG4, AW8692X_BIT_PLAYCFG4_GO_ON);
+}
+
 static NTSTATUS Aw8671xPlayContinuous(PDEVICE_CONTEXT DevContext, ULONG Intensity)
 {
     NTSTATUS Status;
@@ -812,6 +901,40 @@ AW8624VibrateUntilStopped(
 #endif
 
     return Status;
+}
+
+NTSTATUS
+AW8624PlayPulse(
+    PDEVICE_CONTEXT DevContext,
+    ULONG Intensity,
+    ULONG DurationMs
+)
+{
+    NTSTATUS Status;
+
+    if (DevContext == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (!DevContext->HapticsInitialized) {
+        Status = AW8624Initialize(DevContext);
+        if (!NT_SUCCESS(Status)) {
+            return Status;
+        }
+    }
+
+    Status = AW8624Stop(DevContext);
+    if (!NT_SUCCESS(Status)) {
+        return Status;
+    }
+
+    if (DevContext->Family == AwHapticFamily8692x &&
+        DurationMs != 0 &&
+        DurationMs < DevContext->Settings.DurationTime[2]) {
+        return Aw8692xPlayClicky(DevContext, Intensity, DurationMs);
+    }
+
+    return AW8624VibrateUntilStopped(DevContext, Intensity);
 }
 
 NTSTATUS
