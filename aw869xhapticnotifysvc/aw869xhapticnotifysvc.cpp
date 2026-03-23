@@ -5,6 +5,10 @@
 #include <cfgmgr32.h>
 #include <wtsapi32.h>
 #include <userenv.h>
+#include <mmdeviceapi.h>
+#include <endpointvolume.h>
+#include <powrprof.h>
+#include <new>
 #include <cstdarg>
 #include <cstdio>
 #include <string>
@@ -20,6 +24,7 @@
 #pragma comment(lib, "wtsapi32.lib")
 #pragma comment(lib, "userenv.lib")
 #pragma comment(lib, "user32.lib")
+#pragma comment(lib, "ole32.lib")
 
 namespace {
 
@@ -32,14 +37,22 @@ constexpr DWORD kPulseOnMs = 150;
 constexpr ULONG kTypingIntensity = 50;
 constexpr DWORD kTypingPulseOnMs = 11;
 constexpr DWORD kTypingDebounceMs = 40;
+constexpr ULONG kVolumeIntensity = 50;
+constexpr DWORD kVolumePulseOnMs = 11;
+constexpr DWORD kVolumeDebounceMs = 50;
+constexpr ULONG kPowerIntensity = 50;
+constexpr DWORD kPowerPulseOnMs = 11;
+constexpr DWORD kPowerPulseGapMs = 60;
 constexpr LONGLONG kMaxLogSizeBytes = 300 * 1024;
 constexpr ULONGLONG kWnfShelToastPublished = 0x0D83063EA3BD0035ull;
+constexpr wchar_t kPowerWindowClassName[] = L"aw869xhapticnotifysvc_power_window";
 
 SERVICE_STATUS g_serviceStatus = {};
 SERVICE_STATUS_HANDLE g_serviceStatusHandle = nullptr;
 HANDLE g_stopEvent = nullptr;
 EVT_HANDLE g_subscriptionPush = nullptr;
 HANDLE g_hwnHandle = INVALID_HANDLE_VALUE;
+SRWLOCK g_hwnLock = SRWLOCK_INIT;
 volatile ULONGLONG g_lastPulseTick = 0;
 WCHAR g_logPath[MAX_PATH] = {};
 HMODULE g_ntdll = nullptr;
@@ -49,6 +62,58 @@ HANDLE g_keyboardThread = nullptr;
 DWORD g_keyboardThreadId = 0;
 HHOOK g_keyboardHook = nullptr;
 volatile ULONGLONG g_lastTypingPulseTick = 0;
+volatile ULONGLONG g_lastVolumePulseTick = 0;
+DWORD g_lastAcDcState = DWORD_MAX;
+HWND g_powerWindow = nullptr;
+HPOWERNOTIFY g_acDcPowerNotify = nullptr;
+HANDLE g_volumeThread = nullptr;
+IMMDeviceEnumerator* g_deviceEnumerator = nullptr;
+IMMDevice* g_audioEndpoint = nullptr;
+IAudioEndpointVolume* g_endpointVolume = nullptr;
+
+class VolumeCallback final : public IAudioEndpointVolumeCallback
+{
+public:
+    VolumeCallback() : m_refCount(1) {}
+
+    ULONG STDMETHODCALLTYPE AddRef() override
+    {
+        return (ULONG)InterlockedIncrement(&m_refCount);
+    }
+
+    ULONG STDMETHODCALLTYPE Release() override
+    {
+        const ULONG ref = (ULONG)InterlockedDecrement(&m_refCount);
+        if (ref == 0) {
+            delete this;
+        }
+        return ref;
+    }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, VOID** ppvObject) override
+    {
+        if (ppvObject == nullptr) {
+            return E_POINTER;
+        }
+
+        if (riid == __uuidof(IUnknown) || riid == __uuidof(IAudioEndpointVolumeCallback)) {
+            *ppvObject = static_cast<IAudioEndpointVolumeCallback*>(this);
+            AddRef();
+            return S_OK;
+        }
+
+        *ppvObject = nullptr;
+        return E_NOINTERFACE;
+    }
+
+    HRESULT STDMETHODCALLTYPE OnNotify(PAUDIO_VOLUME_NOTIFICATION_DATA notifyData) override;
+
+private:
+    ~VolumeCallback() = default;
+    LONG m_refCount;
+};
+
+VolumeCallback* g_volumeCallback = nullptr;
 
 typedef _Return_type_success_(return >= 0) LONG NTSTATUS;
 
@@ -174,10 +239,12 @@ void UpdateServiceStatus(DWORD currentState, DWORD win32ExitCode, DWORD waitHint
 
 void CloseHwnHandle()
 {
+    AcquireSRWLockExclusive(&g_hwnLock);
     if (g_hwnHandle != INVALID_HANDLE_VALUE) {
         CloseHandle(g_hwnHandle);
         g_hwnHandle = INVALID_HANDLE_VALUE;
     }
+    ReleaseSRWLockExclusive(&g_hwnLock);
 }
 
 void CloseWorkerProcess()
@@ -254,34 +321,37 @@ bool GetFirstDeviceInterfacePath(const GUID& interfaceGuid, std::wstring& path)
 
 bool EnsureHwnHandle()
 {
-    if (g_hwnHandle != INVALID_HANDLE_VALUE) {
-        return true;
-    }
+    AcquireSRWLockExclusive(&g_hwnLock);
+    if (g_hwnHandle == INVALID_HANDLE_VALUE) {
+        const GUID* guids[] = { &HWN_DEVINTERFACE_VIBRATOR, &HWN_DEVINTERFACE };
+        std::wstring path;
 
-    const GUID* guids[] = { &HWN_DEVINTERFACE_VIBRATOR, &HWN_DEVINTERFACE };
-    std::wstring path;
+        for (const GUID* guid : guids) {
+            if (!GetFirstDeviceInterfacePath(*guid, path)) {
+                continue;
+            }
 
-    for (const GUID* guid : guids) {
-        if (!GetFirstDeviceInterfacePath(*guid, path)) {
-            continue;
+            g_hwnHandle = CreateFileW(
+                path.c_str(),
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                nullptr,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                nullptr);
+            if (g_hwnHandle != INVALID_HANDLE_VALUE) {
+                Log(L"haptic-bridge: opened device %s", path.c_str());
+                break;
+            }
         }
-
-        g_hwnHandle = CreateFileW(
-            path.c_str(),
-            GENERIC_READ | GENERIC_WRITE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            nullptr,
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            nullptr);
-        if (g_hwnHandle != INVALID_HANDLE_VALUE) {
-            Log(L"haptic-bridge: opened device %s", path.c_str());
-            return true;
-        }
     }
-
-    Log(L"haptic-bridge: failed to open HWN device, error=%lu", GetLastError());
-    return false;
+    if (g_hwnHandle == INVALID_HANDLE_VALUE) {
+        Log(L"haptic-bridge: failed to open HWN device, error=%lu", GetLastError());
+        ReleaseSRWLockExclusive(&g_hwnLock);
+        return false;
+    }
+    ReleaseSRWLockExclusive(&g_hwnLock);
+    return true;
 }
 
 bool SendHwnPacket(
@@ -293,8 +363,16 @@ bool SendHwnPacket(
 {
     DWORD bytesReturned = 0;
     HWN_SET_PACKET_ONE packet = {};
+    HANDLE hwnHandle = INVALID_HANDLE_VALUE;
 
     if (!EnsureHwnHandle()) {
+        return false;
+    }
+
+    AcquireSRWLockExclusive(&g_hwnLock);
+    hwnHandle = g_hwnHandle;
+    if (hwnHandle == INVALID_HANDLE_VALUE) {
+        ReleaseSRWLockExclusive(&g_hwnLock);
         return false;
     }
 
@@ -310,7 +388,7 @@ bool SendHwnPacket(
     packet.HwNSettingsInfo[0].OffOnBlink = state;
 
     if (!DeviceIoControl(
-            g_hwnHandle,
+            hwnHandle,
             IOCTL_HWN_SET_STATE,
             &packet,
             sizeof(packet),
@@ -319,6 +397,7 @@ bool SendHwnPacket(
             &bytesReturned,
             nullptr)) {
         const DWORD error = GetLastError();
+        ReleaseSRWLockExclusive(&g_hwnLock);
         if (state != HWN_OFF && error == ERROR_GEN_FAILURE) {
             Log(L"haptic-bridge: treating IOCTL_HWN_SET_STATE state=%lu intensity=%lu period=%lu duty=%lu cycles=%lu error=%lu as driver-managed success",
                 (ULONG)state,
@@ -339,6 +418,7 @@ bool SendHwnPacket(
         CloseHwnHandle();
         return false;
     }
+    ReleaseSRWLockExclusive(&g_hwnLock);
 
     Log(L"haptic-bridge: state sent state=%lu intensity=%lu period=%lu duty=%lu cycles=%lu",
         (ULONG)state,
@@ -357,6 +437,24 @@ bool SendHwnState(HWN_STATE state, ULONG intensity)
 bool SendHwnPulse(ULONG intensity, DWORD durationMs)
 {
     return SendHwnPacket(HWN_BLINK, intensity, durationMs, 100, 1);
+}
+
+void SleepMs(DWORD milliseconds)
+{
+    Sleep(milliseconds);
+}
+
+bool SendClickyPulse(ULONG intensity, DWORD durationMs)
+{
+    return SendHwnPulse(intensity, durationMs);
+}
+
+bool SendDoubleClickyPulse(ULONG intensity, DWORD durationMs, DWORD gapMs)
+{
+    bool ok = SendClickyPulse(intensity, durationMs);
+    SleepMs(gapMs);
+    ok = SendClickyPulse(intensity, durationMs) && ok;
+    return ok;
 }
 
 bool TriggerNotificationPulse()
@@ -387,6 +485,9 @@ bool IsTypingVirtualKey(DWORD vkCode)
     case VK_CAPITAL:
     case VK_NUMLOCK:
     case VK_SCROLL:
+    case VK_VOLUME_MUTE:
+    case VK_VOLUME_DOWN:
+    case VK_VOLUME_UP:
         return false;
     default:
         return true;
@@ -426,6 +527,38 @@ bool TryTriggerTypingPulse(DWORD vkCode)
         kTypingIntensity,
         kTypingPulseOnMs);
     return SendHwnPulse(kTypingIntensity, kTypingPulseOnMs);
+}
+
+bool TryTriggerVolumePulse(float volume, BOOL muted)
+{
+    const ULONGLONG now = GetTickCount64();
+    ULONGLONG last;
+    ULONGLONG delta;
+
+    for (;;) {
+        last = (ULONGLONG)InterlockedCompareExchange64((volatile LONG64*)&g_lastVolumePulseTick, 0, 0);
+        delta = now - last;
+
+        if (delta < kVolumeDebounceMs) {
+            Log(L"haptic-bridge: suppressed volume pulse level=%u muted=%u deltaMs=%llu thresholdMs=%lu",
+                (UINT)(volume * 100.0f),
+                muted ? 1U : 0U,
+                delta,
+                kVolumeDebounceMs);
+            return false;
+        }
+
+        if ((ULONGLONG)InterlockedCompareExchange64((volatile LONG64*)&g_lastVolumePulseTick, (LONG64)now, (LONG64)last) == last) {
+            break;
+        }
+    }
+
+    Log(L"haptic-bridge: accepted volume pulse level=%u muted=%u intensity=%lu pulseMs=%lu",
+        (UINT)(volume * 100.0f),
+        muted ? 1U : 0U,
+        kVolumeIntensity,
+        kVolumePulseOnMs);
+    return SendClickyPulse(kVolumeIntensity, kVolumePulseOnMs);
 }
 
 bool TryTriggerNotificationPulse(const wchar_t* source)
@@ -473,9 +606,73 @@ LRESULT CALLBACK KeyboardHookProc(int code, WPARAM wParam, LPARAM lParam)
     return CallNextHookEx(g_keyboardHook, code, wParam, lParam);
 }
 
+LRESULT CALLBACK PowerWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    UNREFERENCED_PARAMETER(hwnd);
+
+    if (message == WM_POWERBROADCAST && wParam == PBT_POWERSETTINGCHANGE && lParam != 0) {
+        const POWERBROADCAST_SETTING* setting = reinterpret_cast<const POWERBROADCAST_SETTING*>(lParam);
+        if (setting->PowerSetting == GUID_ACDC_POWER_SOURCE && setting->DataLength >= sizeof(DWORD)) {
+            const DWORD current = *reinterpret_cast<const DWORD*>(setting->Data);
+            if (g_lastAcDcState == DWORD_MAX) {
+                g_lastAcDcState = current;
+                Log(L"haptic-bridge: initial power source state=%lu", current);
+            } else if (g_lastAcDcState != current) {
+                Log(L"haptic-bridge: power source changed old=%lu new=%lu double-clicky intensity=%lu pulseMs=%lu gapMs=%lu",
+                    g_lastAcDcState,
+                    current,
+                    kPowerIntensity,
+                    kPowerPulseOnMs,
+                    kPowerPulseGapMs);
+                g_lastAcDcState = current;
+                SendDoubleClickyPulse(kPowerIntensity, kPowerPulseOnMs, kPowerPulseGapMs);
+            }
+        }
+        return TRUE;
+    }
+
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
 DWORD WINAPI KeyboardHookThreadProc(LPVOID)
 {
     MSG msg = {};
+    WNDCLASSW windowClass = {};
+    SYSTEM_POWER_STATUS powerStatus = {};
+
+    windowClass.lpfnWndProc = PowerWindowProc;
+    windowClass.hInstance = GetModuleHandleW(nullptr);
+    windowClass.lpszClassName = kPowerWindowClassName;
+    RegisterClassW(&windowClass);
+
+    g_powerWindow = CreateWindowExW(
+        0,
+        kPowerWindowClassName,
+        L"",
+        0,
+        0,
+        0,
+        0,
+        0,
+        HWND_MESSAGE,
+        nullptr,
+        windowClass.hInstance,
+        nullptr);
+    if (g_powerWindow != nullptr) {
+        g_acDcPowerNotify = RegisterPowerSettingNotification(
+            g_powerWindow,
+            &GUID_ACDC_POWER_SOURCE,
+            DEVICE_NOTIFY_WINDOW_HANDLE);
+        if (GetSystemPowerStatus(&powerStatus)) {
+            g_lastAcDcState = powerStatus.ACLineStatus;
+            Log(L"haptic-bridge: seeded power source state=%lu", g_lastAcDcState);
+        }
+        Log(L"haptic-bridge: power notification window ready hwnd=%p notify=%p",
+            g_powerWindow,
+            g_acDcPowerNotify);
+    } else {
+        Log(L"haptic-bridge: CreateWindowEx for power notifications failed error=%lu", GetLastError());
+    }
 
     g_keyboardHook = SetWindowsHookExW(WH_KEYBOARD_LL, KeyboardHookProc, GetModuleHandleW(nullptr), 0);
     if (g_keyboardHook == nullptr) {
@@ -511,6 +708,14 @@ exit:
         UnhookWindowsHookEx(g_keyboardHook);
         g_keyboardHook = nullptr;
     }
+    if (g_acDcPowerNotify != nullptr) {
+        UnregisterPowerSettingNotification(g_acDcPowerNotify);
+        g_acDcPowerNotify = nullptr;
+    }
+    if (g_powerWindow != nullptr) {
+        DestroyWindow(g_powerWindow);
+        g_powerWindow = nullptr;
+    }
     Log(L"haptic-bridge: keyboard hook stopped");
     return 0;
 }
@@ -539,6 +744,116 @@ void StopKeyboardHookThread()
 
     WaitForSingleObject(g_keyboardThread, 5000);
     CloseKeyboardThread();
+}
+
+HRESULT STDMETHODCALLTYPE VolumeCallback::OnNotify(PAUDIO_VOLUME_NOTIFICATION_DATA notifyData)
+{
+    if (notifyData == nullptr) {
+        return E_INVALIDARG;
+    }
+
+    TryTriggerVolumePulse(notifyData->fMasterVolume, notifyData->bMuted);
+    return S_OK;
+}
+
+DWORD WINAPI VolumeMonitorThreadProc(LPVOID)
+{
+    HRESULT hr;
+
+    hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(hr)) {
+        Log(L"haptic-bridge: CoInitializeEx failed hr=0x%08lx", (ULONG)hr);
+        return 1;
+    }
+
+    hr = CoCreateInstance(
+        __uuidof(MMDeviceEnumerator),
+        nullptr,
+        CLSCTX_ALL,
+        __uuidof(IMMDeviceEnumerator),
+        reinterpret_cast<void**>(&g_deviceEnumerator));
+    if (FAILED(hr)) {
+        Log(L"haptic-bridge: CoCreateInstance(MMDeviceEnumerator) failed hr=0x%08lx", (ULONG)hr);
+        goto exit;
+    }
+
+    hr = g_deviceEnumerator->GetDefaultAudioEndpoint(eRender, eMultimedia, &g_audioEndpoint);
+    if (FAILED(hr)) {
+        Log(L"haptic-bridge: GetDefaultAudioEndpoint failed hr=0x%08lx", (ULONG)hr);
+        goto exit;
+    }
+
+    hr = g_audioEndpoint->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(&g_endpointVolume));
+    if (FAILED(hr)) {
+        Log(L"haptic-bridge: Activate(IAudioEndpointVolume) failed hr=0x%08lx", (ULONG)hr);
+        goto exit;
+    }
+
+    g_volumeCallback = new (std::nothrow) VolumeCallback();
+    if (g_volumeCallback == nullptr) {
+        Log(L"haptic-bridge: allocating volume callback failed");
+        goto exit;
+    }
+
+    hr = g_endpointVolume->RegisterControlChangeNotify(g_volumeCallback);
+    if (FAILED(hr)) {
+        Log(L"haptic-bridge: RegisterControlChangeNotify failed hr=0x%08lx", (ULONG)hr);
+        goto exit;
+    }
+
+    Log(L"haptic-bridge: volume callback registered");
+    WaitForSingleObject(g_stopEvent, INFINITE);
+
+exit:
+    if (g_endpointVolume != nullptr && g_volumeCallback != nullptr) {
+        g_endpointVolume->UnregisterControlChangeNotify(g_volumeCallback);
+    }
+    if (g_volumeCallback != nullptr) {
+        g_volumeCallback->Release();
+        g_volumeCallback = nullptr;
+    }
+    if (g_endpointVolume != nullptr) {
+        g_endpointVolume->Release();
+        g_endpointVolume = nullptr;
+    }
+    if (g_audioEndpoint != nullptr) {
+        g_audioEndpoint->Release();
+        g_audioEndpoint = nullptr;
+    }
+    if (g_deviceEnumerator != nullptr) {
+        g_deviceEnumerator->Release();
+        g_deviceEnumerator = nullptr;
+    }
+    CoUninitialize();
+    Log(L"haptic-bridge: volume callback stopped");
+    return 0;
+}
+
+bool StartVolumeMonitorThread()
+{
+    if (g_volumeThread != nullptr) {
+        return true;
+    }
+
+    g_volumeThread = CreateThread(nullptr, 0, VolumeMonitorThreadProc, nullptr, 0, nullptr);
+    if (g_volumeThread == nullptr) {
+        Log(L"haptic-bridge: CreateThread for volume monitor failed error=%lu", GetLastError());
+        return false;
+    }
+
+    Log(L"haptic-bridge: volume monitor thread started");
+    return true;
+}
+
+void StopVolumeMonitorThread()
+{
+    if (g_volumeThread == nullptr) {
+        return;
+    }
+
+    WaitForSingleObject(g_volumeThread, 5000);
+    CloseHandle(g_volumeThread);
+    g_volumeThread = nullptr;
 }
 
 bool InitializeWnfApi()
@@ -884,6 +1199,7 @@ void RunWorker()
     while (WaitForSingleObject(g_stopEvent, 0) != WAIT_OBJECT_0) {
         if (StartSubscriptions()) {
             StartKeyboardHookThread();
+            StartVolumeMonitorThread();
             WaitForSingleObject(g_stopEvent, INFINITE);
             break;
         }
@@ -896,6 +1212,7 @@ void RunWorker()
 
     StopSubscriptions();
     StopKeyboardHookThread();
+    StopVolumeMonitorThread();
     CloseHwnHandle();
     CloseHandle(g_stopEvent);
     g_stopEvent = nullptr;
