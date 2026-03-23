@@ -113,8 +113,8 @@ static UCHAR AwScaleU8(UCHAR BaseValue, ULONG Percent)
     if (Percent == 0) {
         return 0;
     }
-    if (Percent > 100) {
-        Percent = 100;
+    if (Percent > 200) {
+        Percent = 200;
     }
 
     Scaled = ((ULONG)BaseValue * Percent) / 100;
