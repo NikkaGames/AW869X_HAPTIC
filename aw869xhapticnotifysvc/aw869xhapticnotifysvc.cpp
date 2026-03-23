@@ -20,10 +20,10 @@ namespace {
 
 constexpr wchar_t kServiceName[] = L"aw869xhapticnotifysvc";
 constexpr wchar_t kServiceDisplayName[] = L"AW869X Haptic Notification Service";
-constexpr DWORD kNotificationDebounceMs = 750;
+constexpr DWORD kNotificationDebounceMs = 1500;
 constexpr DWORD kSubscriptionRetryMs = 5000;
 constexpr ULONG kNotificationIntensity = 50;
-constexpr DWORD kPulseOnMs = 222;
+constexpr DWORD kPulseOnMs = 150;
 constexpr LONGLONG kMaxLogSizeBytes = 300 * 1024;
 constexpr ULONGLONG kWnfShelToastPublished = 0x0D83063EA3BD0035ull;
 
@@ -290,17 +290,36 @@ bool TriggerNotificationPulse()
     return true;
 }
 
-NTSTATUS NTAPI WnfCallback(ULONGLONG, PVOID, PVOID, PVOID, PVOID, PVOID)
+bool TryTriggerNotificationPulse(const wchar_t* source)
 {
     const ULONGLONG now = GetTickCount64();
-    const ULONGLONG last = (ULONGLONG)InterlockedCompareExchange64((volatile LONG64*)&g_lastPulseTick, 0, 0);
+    ULONGLONG last;
+    ULONGLONG delta;
 
-    if ((now - last) < kNotificationDebounceMs) {
-        return 0;
+    for (;;) {
+        last = (ULONGLONG)InterlockedCompareExchange64((volatile LONG64*)&g_lastPulseTick, 0, 0);
+        delta = now - last;
+
+        if (delta < kNotificationDebounceMs) {
+            Log(L"haptic-bridge: suppressed duplicate source=%s deltaMs=%llu thresholdMs=%lu",
+                source,
+                delta,
+                kNotificationDebounceMs);
+            return false;
+        }
+
+        if ((ULONGLONG)InterlockedCompareExchange64((volatile LONG64*)&g_lastPulseTick, (LONG64)now, (LONG64)last) == last) {
+            break;
+        }
     }
 
-    InterlockedExchange64((volatile LONG64*)&g_lastPulseTick, (LONG64)now);
-    TriggerNotificationPulse();
+    Log(L"haptic-bridge: accepted source=%s deltaMs=%llu", source, delta);
+    return TriggerNotificationPulse();
+}
+
+NTSTATUS NTAPI WnfCallback(ULONGLONG, PVOID, PVOID, PVOID, PVOID, PVOID)
+{
+    TryTriggerNotificationPulse(L"WNF");
     return 0;
 }
 
@@ -385,18 +404,7 @@ DWORD WINAPI EventCallback(EVT_SUBSCRIBE_NOTIFY_ACTION action, PVOID, EVT_HANDLE
             return ERROR_SUCCESS;
         }
     }
-
-    const ULONGLONG now = GetTickCount64();
-    const ULONGLONG last = g_lastPulseTick;
-    if ((now - last) < kNotificationDebounceMs) {
-        if (eventHandle != nullptr) {
-            EvtClose(eventHandle);
-        }
-        return ERROR_SUCCESS;
-    }
-
-    g_lastPulseTick = now;
-    TriggerNotificationPulse();
+    TryTriggerNotificationPulse(L"EVENTLOG");
     if (eventHandle != nullptr) {
         EvtClose(eventHandle);
     }
@@ -476,12 +484,21 @@ bool StartSubscriptionForChannel(const wchar_t* channelPath, EVT_HANDLE* subscri
 
 bool StartSubscriptions()
 {
+    bool started = false;
+
     if (StartWnfSubscription()) {
-        return true;
+        started = true;
+    } else {
+        Log(L"haptic-bridge: WNF subscription unavailable");
     }
 
-    Log(L"haptic-bridge: falling back to event log subscription");
-    return StartSubscriptionForChannel(L"Microsoft-Windows-PushNotification-Platform/Operational", &g_subscriptionPush);
+    if (StartSubscriptionForChannel(L"Microsoft-Windows-PushNotification-Platform/Operational", &g_subscriptionPush)) {
+        started = true;
+    } else {
+        Log(L"haptic-bridge: event log subscription unavailable");
+    }
+
+    return started;
 }
 
 void StopSubscriptions()
