@@ -3,6 +3,8 @@
 #include <winevt.h>
 #include <setupapi.h>
 #include <cfgmgr32.h>
+#include <wtsapi32.h>
+#include <userenv.h>
 #include <cstdarg>
 #include <cstdio>
 #include <string>
@@ -15,12 +17,14 @@
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "setupapi.lib")
 #pragma comment(lib, "wevtapi.lib")
+#pragma comment(lib, "wtsapi32.lib")
+#pragma comment(lib, "userenv.lib")
 
 namespace {
 
 constexpr wchar_t kServiceName[] = L"aw869xhapticnotifysvc";
 constexpr wchar_t kServiceDisplayName[] = L"AW869X Haptic Notification Service";
-constexpr DWORD kNotificationDebounceMs = 1500;
+constexpr DWORD kNotificationDebounceMs = 750;
 constexpr DWORD kSubscriptionRetryMs = 5000;
 constexpr ULONG kNotificationIntensity = 50;
 constexpr DWORD kPulseOnMs = 150;
@@ -36,6 +40,7 @@ volatile ULONGLONG g_lastPulseTick = 0;
 WCHAR g_logPath[MAX_PATH] = {};
 HMODULE g_ntdll = nullptr;
 PVOID g_wnfSubscription = nullptr;
+PROCESS_INFORMATION g_workerProcess = {};
 
 typedef _Return_type_success_(return >= 0) LONG NTSTATUS;
 
@@ -165,6 +170,32 @@ void CloseHwnHandle()
         CloseHandle(g_hwnHandle);
         g_hwnHandle = INVALID_HANDLE_VALUE;
     }
+}
+
+void CloseWorkerProcess()
+{
+    if (g_workerProcess.hThread != nullptr) {
+        CloseHandle(g_workerProcess.hThread);
+        g_workerProcess.hThread = nullptr;
+    }
+    if (g_workerProcess.hProcess != nullptr) {
+        CloseHandle(g_workerProcess.hProcess);
+        g_workerProcess.hProcess = nullptr;
+    }
+    g_workerProcess.dwProcessId = 0;
+    g_workerProcess.dwThreadId = 0;
+}
+
+bool IsSessionZero()
+{
+    DWORD sessionId = 0;
+
+    if (!ProcessIdToSessionId(GetCurrentProcessId(), &sessionId)) {
+        Log(L"haptic-bridge: ProcessIdToSessionId failed error=%lu", GetLastError());
+        return true;
+    }
+
+    return sessionId == 0;
 }
 
 bool GetFirstDeviceInterfacePath(const GUID& interfaceGuid, std::wstring& path)
@@ -484,21 +515,12 @@ bool StartSubscriptionForChannel(const wchar_t* channelPath, EVT_HANDLE* subscri
 
 bool StartSubscriptions()
 {
-    bool started = false;
-
     if (StartWnfSubscription()) {
-        started = true;
-    } else {
-        Log(L"haptic-bridge: WNF subscription unavailable");
+        return true;
     }
 
-    if (StartSubscriptionForChannel(L"Microsoft-Windows-PushNotification-Platform/Operational", &g_subscriptionPush)) {
-        started = true;
-    } else {
-        Log(L"haptic-bridge: event log subscription unavailable");
-    }
-
-    return started;
+    Log(L"haptic-bridge: WNF subscription unavailable, falling back to event log subscription");
+    return StartSubscriptionForChannel(L"Microsoft-Windows-PushNotification-Platform/Operational", &g_subscriptionPush);
 }
 
 void StopSubscriptions()
@@ -528,6 +550,89 @@ DWORD WINAPI ServiceCtrlHandlerEx(DWORD control, DWORD, LPVOID, LPVOID)
     }
 }
 
+bool StartUserSessionWorker()
+{
+    DWORD sessionId = WTSGetActiveConsoleSessionId();
+    HANDLE userToken = nullptr;
+    HANDLE primaryToken = nullptr;
+    LPVOID environment = nullptr;
+    DWORD creationFlags = CREATE_NEW_PROCESS_GROUP;
+    STARTUPINFOW startupInfo = {};
+    wchar_t modulePath[MAX_PATH] = {};
+    wchar_t commandLine[MAX_PATH * 2] = {};
+    bool ok = false;
+
+    if (sessionId == 0xFFFFFFFF) {
+        Log(L"haptic-bridge: no active user session yet");
+        return false;
+    }
+
+    if (GetModuleFileNameW(nullptr, modulePath, _countof(modulePath)) == 0) {
+        Log(L"haptic-bridge: GetModuleFileName failed error=%lu", GetLastError());
+        return false;
+    }
+
+    if (!WTSQueryUserToken(sessionId, &userToken)) {
+        Log(L"haptic-bridge: WTSQueryUserToken failed session=%lu error=%lu", sessionId, GetLastError());
+        return false;
+    }
+
+    if (!DuplicateTokenEx(
+            userToken,
+            TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID,
+            nullptr,
+            SecurityImpersonation,
+            TokenPrimary,
+            &primaryToken)) {
+        Log(L"haptic-bridge: DuplicateTokenEx failed session=%lu error=%lu", sessionId, GetLastError());
+        goto cleanup;
+    }
+
+    if (CreateEnvironmentBlock(&environment, primaryToken, FALSE)) {
+        creationFlags |= CREATE_UNICODE_ENVIRONMENT;
+    } else {
+        environment = nullptr;
+    }
+
+    startupInfo.cb = sizeof(startupInfo);
+    startupInfo.lpDesktop = const_cast<LPWSTR>(L"winsta0\\default");
+    StringCchPrintfW(commandLine, _countof(commandLine), L"\"%s\" run", modulePath);
+
+    ok = CreateProcessAsUserW(
+        primaryToken,
+        nullptr,
+        commandLine,
+        nullptr,
+        nullptr,
+        FALSE,
+        creationFlags,
+        environment,
+        nullptr,
+        &startupInfo,
+        &g_workerProcess) != FALSE;
+    if (!ok) {
+        Log(L"haptic-bridge: CreateProcessAsUser failed session=%lu error=%lu", sessionId, GetLastError());
+        goto cleanup;
+    }
+
+    Log(L"haptic-bridge: started user-session worker session=%lu pid=%lu",
+        sessionId,
+        g_workerProcess.dwProcessId);
+
+cleanup:
+    if (environment != nullptr) {
+        DestroyEnvironmentBlock(environment);
+    }
+    if (primaryToken != nullptr) {
+        CloseHandle(primaryToken);
+    }
+    if (userToken != nullptr) {
+        CloseHandle(userToken);
+    }
+
+    return ok;
+}
+
 void RunWorker()
 {
     g_stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -536,6 +641,56 @@ void RunWorker()
         return;
     }
 
+    if (IsSessionZero()) {
+        Log(L"haptic-bridge: running in session 0, supervising user-session worker");
+
+        while (WaitForSingleObject(g_stopEvent, 0) != WAIT_OBJECT_0) {
+            HANDLE waitHandles[2] = { g_stopEvent, g_workerProcess.hProcess };
+            DWORD waitCount = (g_workerProcess.hProcess != nullptr) ? 2 : 1;
+            DWORD waitResult;
+
+            if (g_workerProcess.hProcess == nullptr && !StartUserSessionWorker()) {
+                Log(L"haptic-bridge: worker retry in %lu ms", kSubscriptionRetryMs);
+                if (WaitForSingleObject(g_stopEvent, kSubscriptionRetryMs) == WAIT_OBJECT_0) {
+                    break;
+                }
+                continue;
+            }
+
+            waitResult = WaitForMultipleObjects(waitCount, waitHandles, FALSE, INFINITE);
+            if (waitResult == WAIT_OBJECT_0) {
+                break;
+            }
+
+            if (waitCount == 2 && waitResult == WAIT_OBJECT_0 + 1) {
+                DWORD exitCode = 0;
+                GetExitCodeProcess(g_workerProcess.hProcess, &exitCode);
+                Log(L"haptic-bridge: user-session worker exited pid=%lu exit=%lu",
+                    g_workerProcess.dwProcessId,
+                    exitCode);
+                CloseWorkerProcess();
+                continue;
+            }
+
+            Log(L"haptic-bridge: WaitForMultipleObjects failed error=%lu", GetLastError());
+            if (WaitForSingleObject(g_stopEvent, kSubscriptionRetryMs) == WAIT_OBJECT_0) {
+                break;
+            }
+        }
+
+        if (g_workerProcess.hProcess != nullptr) {
+            Log(L"haptic-bridge: stopping user-session worker pid=%lu", g_workerProcess.dwProcessId);
+            TerminateProcess(g_workerProcess.hProcess, 0);
+            WaitForSingleObject(g_workerProcess.hProcess, 5000);
+            CloseWorkerProcess();
+        }
+
+        CloseHandle(g_stopEvent);
+        g_stopEvent = nullptr;
+        return;
+    }
+
+    Log(L"haptic-bridge: running in user session");
     EnsureHwnHandle();
     while (WaitForSingleObject(g_stopEvent, 0) != WAIT_OBJECT_0) {
         if (StartSubscriptions()) {

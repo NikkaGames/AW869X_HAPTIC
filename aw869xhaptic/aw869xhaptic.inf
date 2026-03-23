@@ -62,6 +62,6 @@ SPSVCINST_ASSOCSERVICE      = 0x00000002
 
 ManufacturerName            = "Nikka"
 DiskName                    = "AW869X Haptic Installation Disk"
-aw869xhaptic.DeviceDesc     = "AW869X Haptic Device"
-aw869xhaptic.SVCDESC        = "AW869X Haptic Device"
+aw869xhaptic.DeviceDesc     = "RedMagic 8 Pro AW869X Haptic Chip Controller Device"
+aw869xhaptic.SVCDESC        = "RedMagic 8 Pro AW869X Haptic Chip Controller Device"
 aw869xhapticnotifysvc.SVCDESC = "AW869X Haptic Notification Service"
