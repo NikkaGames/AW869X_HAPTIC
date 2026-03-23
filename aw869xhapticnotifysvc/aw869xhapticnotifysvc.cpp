@@ -20,12 +20,12 @@ namespace {
 
 constexpr wchar_t kServiceName[] = L"aw869xhapticnotifysvc";
 constexpr wchar_t kServiceDisplayName[] = L"AW869X Haptic Notification Service";
-constexpr wchar_t kQuery[] = L"*";
-constexpr DWORD kNotificationDebounceMs = 4000;
+constexpr DWORD kNotificationDebounceMs = 750;
 constexpr DWORD kSubscriptionRetryMs = 5000;
 constexpr ULONG kNotificationIntensity = 50;
 constexpr DWORD kPulseOnMs = 222;
 constexpr LONGLONG kMaxLogSizeBytes = 300 * 1024;
+constexpr ULONGLONG kWnfShelToastPublished = 0x0D83063EA3BD0035ull;
 
 SERVICE_STATUS g_serviceStatus = {};
 SERVICE_STATUS_HANDLE g_serviceStatusHandle = nullptr;
@@ -34,6 +34,29 @@ EVT_HANDLE g_subscriptionPush = nullptr;
 HANDLE g_hwnHandle = INVALID_HANDLE_VALUE;
 volatile ULONGLONG g_lastPulseTick = 0;
 WCHAR g_logPath[MAX_PATH] = {};
+HMODULE g_ntdll = nullptr;
+PVOID g_wnfSubscription = nullptr;
+
+typedef _Return_type_success_(return >= 0) LONG NTSTATUS;
+
+typedef struct _WNF_TYPE_ID
+{
+    GUID TypeId;
+} WNF_TYPE_ID, * PWNF_TYPE_ID;
+
+typedef ULONG WNF_CHANGE_STAMP, * PWNF_CHANGE_STAMP;
+
+using WNF_CALLBACK = NTSTATUS (NTAPI*)(ULONGLONG, PVOID, PVOID, PVOID, PVOID, PVOID);
+using RTL_SUBSCRIBE_WNF_STATE_CHANGE_NOTIFICATION =
+    NTSTATUS (NTAPI*)(PVOID*, ULONGLONG, ULONG, WNF_CALLBACK, PVOID, PVOID, PVOID, ULONG);
+using RTL_UNSUBSCRIBE_WNF_STATE_CHANGE_NOTIFICATION =
+    NTSTATUS (NTAPI*)(PVOID);
+using NT_QUERY_WNF_STATE_DATA =
+    NTSTATUS (NTAPI*)(PULONG64, PWNF_TYPE_ID, const VOID*, PWNF_CHANGE_STAMP, PVOID, PULONG);
+
+RTL_SUBSCRIBE_WNF_STATE_CHANGE_NOTIFICATION g_RtlSubscribeWnfStateChangeNotification = nullptr;
+RTL_UNSUBSCRIBE_WNF_STATE_CHANGE_NOTIFICATION g_RtlUnsubscribeWnfStateChangeNotification = nullptr;
+NT_QUERY_WNF_STATE_DATA g_NtQueryWnfStateData = nullptr;
 
 struct HWN_SET_PACKET_ONE {
     ULONG HwNPayloadSize;
@@ -267,6 +290,61 @@ bool TriggerNotificationPulse()
     return true;
 }
 
+NTSTATUS NTAPI WnfCallback(ULONGLONG, PVOID, PVOID, PVOID, PVOID, PVOID)
+{
+    const ULONGLONG now = GetTickCount64();
+    const ULONGLONG last = (ULONGLONG)InterlockedCompareExchange64((volatile LONG64*)&g_lastPulseTick, 0, 0);
+
+    if ((now - last) < kNotificationDebounceMs) {
+        return 0;
+    }
+
+    InterlockedExchange64((volatile LONG64*)&g_lastPulseTick, (LONG64)now);
+    TriggerNotificationPulse();
+    return 0;
+}
+
+bool InitializeWnfApi()
+{
+    if (g_RtlSubscribeWnfStateChangeNotification != nullptr &&
+        g_RtlUnsubscribeWnfStateChangeNotification != nullptr &&
+        g_NtQueryWnfStateData != nullptr) {
+        return true;
+    }
+
+    g_ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (g_ntdll == nullptr) {
+        g_ntdll = LoadLibraryW(L"ntdll.dll");
+    }
+
+    if (g_ntdll == nullptr) {
+        Log(L"haptic-bridge: failed to load ntdll, error=%lu", GetLastError());
+        return false;
+    }
+
+    g_RtlSubscribeWnfStateChangeNotification =
+        reinterpret_cast<RTL_SUBSCRIBE_WNF_STATE_CHANGE_NOTIFICATION>(
+            GetProcAddress(g_ntdll, "RtlSubscribeWnfStateChangeNotification"));
+    g_RtlUnsubscribeWnfStateChangeNotification =
+        reinterpret_cast<RTL_UNSUBSCRIBE_WNF_STATE_CHANGE_NOTIFICATION>(
+            GetProcAddress(g_ntdll, "RtlUnsubscribeWnfStateChangeNotification"));
+    g_NtQueryWnfStateData =
+        reinterpret_cast<NT_QUERY_WNF_STATE_DATA>(
+            GetProcAddress(g_ntdll, "NtQueryWnfStateData"));
+
+    if (g_RtlSubscribeWnfStateChangeNotification == nullptr ||
+        g_RtlUnsubscribeWnfStateChangeNotification == nullptr ||
+        g_NtQueryWnfStateData == nullptr) {
+        Log(L"haptic-bridge: WNF APIs not available subscribe=%p unsubscribe=%p query=%p",
+            g_RtlSubscribeWnfStateChangeNotification,
+            g_RtlUnsubscribeWnfStateChangeNotification,
+            g_NtQueryWnfStateData);
+        return false;
+    }
+
+    return true;
+}
+
 bool RenderEventXml(EVT_HANDLE eventHandle, std::wstring& xml)
 {
     DWORD bufferUsed = 0;
@@ -325,6 +403,56 @@ DWORD WINAPI EventCallback(EVT_SUBSCRIBE_NOTIFY_ACTION action, PVOID, EVT_HANDLE
     return ERROR_SUCCESS;
 }
 
+bool StartWnfSubscription()
+{
+    std::vector<BYTE> stateBuffer(8192);
+    ULONG stateBufferSize = (ULONG)stateBuffer.size();
+    WNF_CHANGE_STAMP changeStamp = 0;
+    NTSTATUS status = 0;
+    ULONGLONG stateName = kWnfShelToastPublished;
+
+    if (!InitializeWnfApi()) {
+        return false;
+    }
+
+    status = g_NtQueryWnfStateData(
+        &stateName,
+        nullptr,
+        nullptr,
+        &changeStamp,
+        stateBuffer.data(),
+        &stateBufferSize);
+    if (status < 0) {
+        Log(L"haptic-bridge: NtQueryWnfStateData failed state=0x%I64x status=0x%08lx size=%lu",
+            stateName,
+            (ULONG)status,
+            stateBufferSize);
+        changeStamp = 0;
+    }
+
+    status = g_RtlSubscribeWnfStateChangeNotification(
+        &g_wnfSubscription,
+        stateName,
+        changeStamp,
+        WnfCallback,
+        nullptr,
+        nullptr,
+        nullptr,
+        1);
+    if (status < 0 || g_wnfSubscription == nullptr) {
+        Log(L"haptic-bridge: RtlSubscribeWnfStateChangeNotification failed state=0x%I64x status=0x%08lx",
+            stateName,
+            (ULONG)status);
+        g_wnfSubscription = nullptr;
+        return false;
+    }
+
+    Log(L"haptic-bridge: subscribed to WNF toast state=0x%I64x changestamp=%lu",
+        stateName,
+        changeStamp);
+    return true;
+}
+
 bool StartSubscriptionForChannel(const wchar_t* channelPath, EVT_HANDLE* subscriptionHandle)
 {
     *subscriptionHandle = EvtSubscribe(
@@ -348,11 +476,20 @@ bool StartSubscriptionForChannel(const wchar_t* channelPath, EVT_HANDLE* subscri
 
 bool StartSubscriptions()
 {
+    if (StartWnfSubscription()) {
+        return true;
+    }
+
+    Log(L"haptic-bridge: falling back to event log subscription");
     return StartSubscriptionForChannel(L"Microsoft-Windows-PushNotification-Platform/Operational", &g_subscriptionPush);
 }
 
 void StopSubscriptions()
 {
+    if (g_wnfSubscription != nullptr && g_RtlUnsubscribeWnfStateChangeNotification != nullptr) {
+        g_RtlUnsubscribeWnfStateChangeNotification(g_wnfSubscription);
+        g_wnfSubscription = nullptr;
+    }
     if (g_subscriptionPush != nullptr) {
         EvtClose(g_subscriptionPush);
         g_subscriptionPush = nullptr;
