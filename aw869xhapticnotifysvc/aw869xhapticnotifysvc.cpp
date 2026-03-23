@@ -19,6 +19,7 @@
 #pragma comment(lib, "wevtapi.lib")
 #pragma comment(lib, "wtsapi32.lib")
 #pragma comment(lib, "userenv.lib")
+#pragma comment(lib, "user32.lib")
 
 namespace {
 
@@ -28,6 +29,9 @@ constexpr DWORD kNotificationDebounceMs = 750;
 constexpr DWORD kSubscriptionRetryMs = 5000;
 constexpr ULONG kNotificationIntensity = 50;
 constexpr DWORD kPulseOnMs = 150;
+constexpr ULONG kTypingIntensity = 50;
+constexpr DWORD kTypingPulseOnMs = 50;
+constexpr DWORD kTypingDebounceMs = 40;
 constexpr LONGLONG kMaxLogSizeBytes = 300 * 1024;
 constexpr ULONGLONG kWnfShelToastPublished = 0x0D83063EA3BD0035ull;
 
@@ -41,6 +45,10 @@ WCHAR g_logPath[MAX_PATH] = {};
 HMODULE g_ntdll = nullptr;
 PVOID g_wnfSubscription = nullptr;
 PROCESS_INFORMATION g_workerProcess = {};
+HANDLE g_keyboardThread = nullptr;
+DWORD g_keyboardThreadId = 0;
+HHOOK g_keyboardHook = nullptr;
+volatile ULONGLONG g_lastTypingPulseTick = 0;
 
 typedef _Return_type_success_(return >= 0) LONG NTSTATUS;
 
@@ -186,6 +194,15 @@ void CloseWorkerProcess()
     g_workerProcess.dwThreadId = 0;
 }
 
+void CloseKeyboardThread()
+{
+    if (g_keyboardThread != nullptr) {
+        CloseHandle(g_keyboardThread);
+        g_keyboardThread = nullptr;
+    }
+    g_keyboardThreadId = 0;
+}
+
 bool IsSessionZero()
 {
     DWORD sessionId = 0;
@@ -267,7 +284,12 @@ bool EnsureHwnHandle()
     return false;
 }
 
-bool SendHwnState(HWN_STATE state, ULONG intensity)
+bool SendHwnPacket(
+    HWN_STATE state,
+    ULONG intensity,
+    ULONG period,
+    ULONG dutyCycle,
+    ULONG cycleCount)
 {
     DWORD bytesReturned = 0;
     HWN_SET_PACKET_ONE packet = {};
@@ -282,6 +304,9 @@ bool SendHwnState(HWN_STATE state, ULONG intensity)
     packet.HwNSettingsInfo[0].HwNId = 0;
     packet.HwNSettingsInfo[0].HwNType = HWN_VIBRATOR;
     packet.HwNSettingsInfo[0].HwNSettings[HWN_INTENSITY] = intensity;
+    packet.HwNSettingsInfo[0].HwNSettings[HWN_PERIOD] = period;
+    packet.HwNSettingsInfo[0].HwNSettings[HWN_DUTY_CYCLE] = dutyCycle;
+    packet.HwNSettingsInfo[0].HwNSettings[HWN_CYCLE_COUNT] = cycleCount;
     packet.HwNSettingsInfo[0].OffOnBlink = state;
 
     if (!DeviceIoControl(
@@ -294,20 +319,44 @@ bool SendHwnState(HWN_STATE state, ULONG intensity)
             &bytesReturned,
             nullptr)) {
         const DWORD error = GetLastError();
-        if (state == HWN_ON && error == ERROR_GEN_FAILURE) {
-            Log(L"haptic-bridge: treating IOCTL_HWN_SET_STATE state=%lu intensity=%lu error=%lu as driver-managed success",
+        if (state != HWN_OFF && error == ERROR_GEN_FAILURE) {
+            Log(L"haptic-bridge: treating IOCTL_HWN_SET_STATE state=%lu intensity=%lu period=%lu duty=%lu cycles=%lu error=%lu as driver-managed success",
                 (ULONG)state,
                 intensity,
+                period,
+                dutyCycle,
+                cycleCount,
                 error);
             return true;
         }
-        Log(L"haptic-bridge: IOCTL_HWN_SET_STATE failed state=%lu intensity=%lu error=%lu", (ULONG)state, intensity, error);
+        Log(L"haptic-bridge: IOCTL_HWN_SET_STATE failed state=%lu intensity=%lu period=%lu duty=%lu cycles=%lu error=%lu",
+            (ULONG)state,
+            intensity,
+            period,
+            dutyCycle,
+            cycleCount,
+            error);
         CloseHwnHandle();
         return false;
     }
 
-    Log(L"haptic-bridge: state sent state=%lu intensity=%lu", (ULONG)state, intensity);
+    Log(L"haptic-bridge: state sent state=%lu intensity=%lu period=%lu duty=%lu cycles=%lu",
+        (ULONG)state,
+        intensity,
+        period,
+        dutyCycle,
+        cycleCount);
     return true;
+}
+
+bool SendHwnState(HWN_STATE state, ULONG intensity)
+{
+    return SendHwnPacket(state, intensity, 0, 0, 0);
+}
+
+bool SendHwnPulse(ULONG intensity, DWORD durationMs)
+{
+    return SendHwnPacket(HWN_BLINK, intensity, durationMs, 100, 1);
 }
 
 bool TriggerNotificationPulse()
@@ -319,6 +368,64 @@ bool TriggerNotificationPulse()
         (ULONG)kPulseOnMs,
         kNotificationIntensity);
     return true;
+}
+
+bool IsTypingVirtualKey(DWORD vkCode)
+{
+    switch (vkCode) {
+    case VK_SHIFT:
+    case VK_LSHIFT:
+    case VK_RSHIFT:
+    case VK_CONTROL:
+    case VK_LCONTROL:
+    case VK_RCONTROL:
+    case VK_MENU:
+    case VK_LMENU:
+    case VK_RMENU:
+    case VK_LWIN:
+    case VK_RWIN:
+    case VK_CAPITAL:
+    case VK_NUMLOCK:
+    case VK_SCROLL:
+        return false;
+    default:
+        return true;
+    }
+}
+
+bool TryTriggerTypingPulse(DWORD vkCode)
+{
+    const ULONGLONG now = GetTickCount64();
+    ULONGLONG last;
+    ULONGLONG delta;
+
+    if (!IsTypingVirtualKey(vkCode)) {
+        return false;
+    }
+
+    for (;;) {
+        last = (ULONGLONG)InterlockedCompareExchange64((volatile LONG64*)&g_lastTypingPulseTick, 0, 0);
+        delta = now - last;
+
+        if (delta < kTypingDebounceMs) {
+            Log(L"haptic-bridge: suppressed typing pulse vk=%lu deltaMs=%llu thresholdMs=%lu",
+                (ULONG)vkCode,
+                delta,
+                kTypingDebounceMs);
+            return false;
+        }
+
+        if ((ULONGLONG)InterlockedCompareExchange64((volatile LONG64*)&g_lastTypingPulseTick, (LONG64)now, (LONG64)last) == last) {
+            break;
+        }
+    }
+
+    Log(L"haptic-bridge: accepted typing pulse vk=%lu deltaMs=%llu intensity=%lu pulseMs=%lu",
+        (ULONG)vkCode,
+        delta,
+        kTypingIntensity,
+        kTypingPulseOnMs);
+    return SendHwnPulse(kTypingIntensity, kTypingPulseOnMs);
 }
 
 bool TryTriggerNotificationPulse(const wchar_t* source)
@@ -352,6 +459,86 @@ NTSTATUS NTAPI WnfCallback(ULONGLONG, PVOID, PVOID, PVOID, PVOID, PVOID)
 {
     TryTriggerNotificationPulse(L"WNF");
     return 0;
+}
+
+LRESULT CALLBACK KeyboardHookProc(int code, WPARAM wParam, LPARAM lParam)
+{
+    if (code == HC_ACTION &&
+        (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) &&
+        lParam != 0) {
+        const KBDLLHOOKSTRUCT* keyboard = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lParam);
+        TryTriggerTypingPulse(keyboard->vkCode);
+    }
+
+    return CallNextHookEx(g_keyboardHook, code, wParam, lParam);
+}
+
+DWORD WINAPI KeyboardHookThreadProc(LPVOID)
+{
+    MSG msg = {};
+
+    g_keyboardHook = SetWindowsHookExW(WH_KEYBOARD_LL, KeyboardHookProc, GetModuleHandleW(nullptr), 0);
+    if (g_keyboardHook == nullptr) {
+        Log(L"haptic-bridge: SetWindowsHookEx failed error=%lu", GetLastError());
+        return 1;
+    }
+
+    Log(L"haptic-bridge: keyboard hook installed");
+    PeekMessageW(&msg, nullptr, 0, 0, PM_NOREMOVE);
+
+    while (true) {
+        DWORD wait = MsgWaitForMultipleObjects(1, &g_stopEvent, FALSE, INFINITE, QS_ALLINPUT);
+        if (wait == WAIT_OBJECT_0) {
+            break;
+        }
+        if (wait == WAIT_OBJECT_0 + 1) {
+            while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                if (msg.message == WM_QUIT) {
+                    goto exit;
+                }
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+            continue;
+        }
+
+        Log(L"haptic-bridge: MsgWaitForMultipleObjects failed error=%lu", GetLastError());
+        break;
+    }
+
+exit:
+    if (g_keyboardHook != nullptr) {
+        UnhookWindowsHookEx(g_keyboardHook);
+        g_keyboardHook = nullptr;
+    }
+    Log(L"haptic-bridge: keyboard hook stopped");
+    return 0;
+}
+
+bool StartKeyboardHookThread()
+{
+    if (g_keyboardThread != nullptr) {
+        return true;
+    }
+
+    g_keyboardThread = CreateThread(nullptr, 0, KeyboardHookThreadProc, nullptr, 0, &g_keyboardThreadId);
+    if (g_keyboardThread == nullptr) {
+        Log(L"haptic-bridge: CreateThread for keyboard hook failed error=%lu", GetLastError());
+        return false;
+    }
+
+    Log(L"haptic-bridge: keyboard hook thread started tid=%lu", g_keyboardThreadId);
+    return true;
+}
+
+void StopKeyboardHookThread()
+{
+    if (g_keyboardThread == nullptr) {
+        return;
+    }
+
+    WaitForSingleObject(g_keyboardThread, 5000);
+    CloseKeyboardThread();
 }
 
 bool InitializeWnfApi()
@@ -696,6 +883,7 @@ void RunWorker()
     EnsureHwnHandle();
     while (WaitForSingleObject(g_stopEvent, 0) != WAIT_OBJECT_0) {
         if (StartSubscriptions()) {
+            StartKeyboardHookThread();
             WaitForSingleObject(g_stopEvent, INFINITE);
             break;
         }
@@ -707,6 +895,7 @@ void RunWorker()
     }
 
     StopSubscriptions();
+    StopKeyboardHookThread();
     CloseHwnHandle();
     CloseHandle(g_stopEvent);
     g_stopEvent = nullptr;
