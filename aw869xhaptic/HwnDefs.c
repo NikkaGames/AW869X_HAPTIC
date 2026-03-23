@@ -119,19 +119,10 @@ AW869XHapticToggleVibrationMotor(
 		}
 
 		status = AW8624VibrateUntilStopped(devContext, intensity);
-		if (NT_SUCCESS(status) && devContext->BlinkTimer != NULL)
+		if (NT_SUCCESS(status))
 		{
-			if (!WdfTimerStart(devContext->BlinkTimer, WDF_REL_TIMEOUT_IN_MS(pulseMs)))
-			{
-#ifdef DEBUG
-				Trace(
-					TRACE_LEVEL_WARNING,
-					TRACE_HAPTICS,
-					"%!FUNC!: timer already queued pulseMs=%lu intensity=%lu",
-					pulseMs,
-					intensity);
-#endif
-			}
+			AW869XHapticSleepMs(pulseMs);
+			status = AW8624Stop(devContext);
 		}
 		break;
 	}
