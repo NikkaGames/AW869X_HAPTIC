@@ -87,6 +87,7 @@ AW869XHapticInitializeDevice(
 	
 	devContext->Device = Device;
 	devContext->InterruptPresent = FALSE;
+	devContext->StartupPulseDone = FALSE;
 
 	//
 	// Get the resouce hub connection ID for our I2C driver

@@ -65,6 +65,7 @@ typedef struct _DEVICE_CONTEXT
 	ULONG ChipId;
 	AW_HAPTIC_SETTINGS Settings;
 	BOOLEAN HapticsInitialized;
+	BOOLEAN StartupPulseDone;
 
 	PAW8624_HAPTICS_CURRENT_STATE CurrentStates;
 	HWN_STATE PreviousState;

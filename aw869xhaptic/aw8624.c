@@ -820,6 +820,7 @@ AW8624Start(
 )
 {
     NTSTATUS Status;
+    BOOLEAN ShouldPulse;
 
     if (DevContext == NULL) {
         return STATUS_INVALID_PARAMETER;
@@ -836,10 +837,24 @@ AW8624Start(
         WdfTimerStop(DevContext->BlinkTimer, FALSE);
     }
 
+    ShouldPulse = (DevContext->StartupPulseDone == FALSE);
+    if (!ShouldPulse) {
+#ifdef DEBUG
+        Trace(TRACE_LEVEL_INFORMATION, TRACE_HAPTICS,
+            "%!FUNC!: startup pulse already completed, skipping family=%lu chipId=0x%04X",
+            (ULONG)DevContext->Family,
+            DevContext->ChipId);
+#endif
+        return STATUS_SUCCESS;
+    }
+
     Status = AW8624VibrateUntilStopped(DevContext, 50);
     if (NT_SUCCESS(Status)) {
         AwSleepMs(666);
         Status = AW8624Stop(DevContext);
+        if (NT_SUCCESS(Status)) {
+            DevContext->StartupPulseDone = TRUE;
+        }
     }
 
 #ifdef DEBUG
