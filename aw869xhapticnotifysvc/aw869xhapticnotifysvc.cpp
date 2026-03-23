@@ -556,7 +556,7 @@ bool StartUserSessionWorker()
     HANDLE userToken = nullptr;
     HANDLE primaryToken = nullptr;
     LPVOID environment = nullptr;
-    DWORD creationFlags = CREATE_NEW_PROCESS_GROUP;
+    DWORD creationFlags = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW;
     STARTUPINFOW startupInfo = {};
     wchar_t modulePath[MAX_PATH] = {};
     wchar_t commandLine[MAX_PATH * 2] = {};
@@ -595,6 +595,8 @@ bool StartUserSessionWorker()
     }
 
     startupInfo.cb = sizeof(startupInfo);
+    startupInfo.dwFlags = STARTF_USESHOWWINDOW;
+    startupInfo.wShowWindow = SW_HIDE;
     startupInfo.lpDesktop = const_cast<LPWSTR>(L"winsta0\\default");
     StringCchPrintfW(commandLine, _countof(commandLine), L"\"%s\" run", modulePath);
 
