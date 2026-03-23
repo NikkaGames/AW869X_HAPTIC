@@ -721,7 +721,7 @@ static NTSTATUS Aw8692xPlayClicky(PDEVICE_CONTEXT DevContext, ULONG Intensity, U
 {
     NTSTATUS Status;
     UCHAR BaseBstVol = DevContext->Settings.BstVolRam != 0 ? DevContext->Settings.BstVolRam : DevContext->Settings.BstVolDefault;
-    UCHAR Gain = AwScaleWithinLimit(AW_GAIN_MAX, 0xFF, Intensity);
+    UCHAR Gain = AwScaleWithinLimit(0xFF, 0xFF, Intensity);
     UCHAR BstVol = AwScaleWithinLimit(BaseBstVol, DevContext->Settings.MaxBstVol, Intensity);
     UCHAR WaveSeq = 0;
     UCHAR WaveLoop = 0;
