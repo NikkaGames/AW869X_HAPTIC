@@ -142,23 +142,19 @@ static UCHAR AwScaleWithinLimit(UCHAR BaseValue, UCHAR Limit, ULONG Percent)
 {
     ULONG Scaled;
 
-    if (BaseValue == 0) {
+    if (Percent == 0) {
         return 0;
     }
-
-    if (Percent < 100) {
-        Percent = 100;
+    if (Percent > 200) {
+        Percent = 200;
+    }
+    if (Limit == 0 || Limit <= BaseValue) {
+        return BaseValue;
     }
 
-    Scaled = ((ULONG)BaseValue * Percent) / 100;
-    if (Scaled < BaseValue) {
-        Scaled = BaseValue;
-    }
-    if (Limit != 0 && Scaled > Limit) {
+    Scaled = (ULONG)BaseValue + ((((ULONG)Limit - (ULONG)BaseValue) * Percent) / 200);
+    if (Scaled > Limit) {
         Scaled = Limit;
-    }
-    if (Scaled > 0xFF) {
-        Scaled = 0xFF;
     }
 
     return (UCHAR)Scaled;
@@ -721,7 +717,7 @@ static NTSTATUS Aw8692xPlayClicky(PDEVICE_CONTEXT DevContext, ULONG Intensity, U
 {
     NTSTATUS Status;
     UCHAR BaseBstVol = DevContext->Settings.BstVolRam != 0 ? DevContext->Settings.BstVolRam : DevContext->Settings.BstVolDefault;
-    UCHAR Gain = AwScaleWithinLimit(0xFF, 0xFF, Intensity);
+    UCHAR Gain = AwScaleWithinLimit(AW_GAIN_MAX, 0xFF, Intensity);
     UCHAR BstVol = AwScaleWithinLimit(BaseBstVol, DevContext->Settings.MaxBstVol, Intensity);
     UCHAR WaveSeq = 0;
     UCHAR WaveLoop = 0;
