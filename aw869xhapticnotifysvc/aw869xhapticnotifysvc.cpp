@@ -18,8 +18,8 @@
 
 namespace {
 
-constexpr wchar_t kServiceName[] = L"AW869XNotifySvc";
-constexpr wchar_t kServiceDisplayName[] = L"AW869X Notification Service";
+constexpr wchar_t kServiceName[] = L"aw869xhapticnotifysvc";
+constexpr wchar_t kServiceDisplayName[] = L"AW869X Haptic Notification Service";
 constexpr wchar_t kQuery[] = L"*";
 constexpr DWORD kNotificationDebounceMs = 4000;
 constexpr DWORD kSubscriptionRetryMs = 5000;
@@ -112,7 +112,7 @@ void InitializeLogPath()
 
     StringCchPrintfW(logDir, _countof(logDir), L"%s\\Nikka", programData);
     CreateDirectoryW(logDir, nullptr);
-    StringCchPrintfW(g_logPath, _countof(g_logPath), L"%s\\AW869XNotifySvc.log", logDir);
+    StringCchPrintfW(g_logPath, _countof(g_logPath), L"%s\\aw869xhapticnotifysvc.log", logDir);
 }
 
 void UpdateServiceStatus(DWORD currentState, DWORD win32ExitCode, DWORD waitHint)

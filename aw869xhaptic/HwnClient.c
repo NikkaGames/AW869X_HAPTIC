@@ -25,7 +25,7 @@ Environment:
 #endif
 
 static VOID
-AW8624HapticsSleepMs(
+AW869XHapticSleepMs(
 	ULONG Milliseconds
 )
 {
@@ -36,19 +36,19 @@ AW8624HapticsSleepMs(
 }
 
 #ifdef ALLOC_PRAGMA
-#pragma alloc_text (PAGE, AW8624HapticsInitializeDevice)
-#pragma alloc_text (PAGE, AW8624HapticsUnInitializeDevice)
-#pragma alloc_text (PAGE, AW8624HapticsQueryDeviceInformation)
-#pragma alloc_text (PAGE, AW8624HapticsStartDevice)
-#pragma alloc_text (PAGE, AW8624HapticsStopDevice)
-#pragma alloc_text (PAGE, AW8624HapticsSetState)
-#pragma alloc_text (PAGE, AW8624HapticsGetState)
+#pragma alloc_text (PAGE, AW869XHapticInitializeDevice)
+#pragma alloc_text (PAGE, AW869XHapticUnInitializeDevice)
+#pragma alloc_text (PAGE, AW869XHapticQueryDeviceInformation)
+#pragma alloc_text (PAGE, AW869XHapticStartDevice)
+#pragma alloc_text (PAGE, AW869XHapticStopDevice)
+#pragma alloc_text (PAGE, AW869XHapticSetState)
+#pragma alloc_text (PAGE, AW869XHapticGetState)
 #endif
 
 PDEVICE_CONTEXT globalContext = NULL;
 
 BOOLEAN
-AW8624HapticsEvtInterruptIsr(
+AW869XHapticEvtInterruptIsr(
 	WDFINTERRUPT Interrupt,
 	ULONG MessageID
 )
@@ -60,7 +60,7 @@ AW8624HapticsEvtInterruptIsr(
 }
 
 NTSTATUS
-AW8624HapticsInitializeDevice(
+AW869XHapticInitializeDevice(
 	__in WDFDEVICE Device,
 	__in PVOID Context,
 	__in WDFCMRESLIST ResourcesRaw,
@@ -113,7 +113,7 @@ AW8624HapticsInitializeDevice(
 		{
 			WDF_INTERRUPT_CONFIG_INIT(
 				&interruptConfig,
-				AW8624HapticsEvtInterruptIsr,
+				AW869XHapticEvtInterruptIsr,
 				NULL
 			);
 
@@ -212,7 +212,7 @@ exit:
 }
 
 NTSTATUS
-AW8624HapticsUnInitializeDevice(
+AW869XHapticUnInitializeDevice(
 	__in WDFDEVICE Device,
 	__in PVOID Context
 )
@@ -245,7 +245,7 @@ AW8624HapticsUnInitializeDevice(
 }
 
 NTSTATUS
-AW8624HapticsQueryDeviceInformation(
+AW869XHapticQueryDeviceInformation(
 	__in PVOID Context,
 	__out PCLIENT_DEVICE_INFORMATION Information
 )
@@ -279,7 +279,7 @@ AW8624HapticsQueryDeviceInformation(
 }
 
 NTSTATUS
-AW8624HapticsStartDevice(
+AW869XHapticStartDevice(
 	__in PVOID Context
 )
 {
@@ -310,7 +310,7 @@ AW8624HapticsStartDevice(
 }
 
 NTSTATUS
-AW8624HapticsStopDevice(
+AW869XHapticStopDevice(
 	__in PVOID Context
 )
 {
@@ -339,7 +339,7 @@ AW8624HapticsStopDevice(
 	status = AW8624VibrateUntilStopped(devContext, 50);
 	if (NT_SUCCESS(status))
 	{
-		AW8624HapticsSleepMs(100);
+		AW869XHapticSleepMs(100);
 	}
 
 	status = AW8624Stop(devContext);
@@ -355,7 +355,7 @@ AW8624HapticsStopDevice(
 #define EXTRA_BYTES_AFTER_HWN_DEVICES(x) ((x - HWN_HEADER_SIZE) % HWN_SETTINGS_SIZE)
 
 NTSTATUS
-AW8624HapticsSetState(
+AW869XHapticSetState(
 	__in PVOID Context,
 	__in_bcount(BufferLength) PVOID Buffer,
 	__in ULONG BufferLength,
@@ -424,14 +424,14 @@ AW8624HapticsSetState(
 #endif
 
 		// Set device settings here
-		status = AW8624HapticsSetDevice(Context, &(hwnHeader->HwNSettingsInfo[i]));
+		status = AW869XHapticSetDevice(Context, &(hwnHeader->HwNSettingsInfo[i]));
 		if (!NT_SUCCESS(status))
 		{
 			goto exit;
 		}
 
 		// Backup device settings somewhere to retrieve them later
-		status = AW8624HapticsSetCurrentDeviceState(devContext, &(hwnHeader->HwNSettingsInfo[i]), HWN_SETTINGS_SIZE);
+		status = AW869XHapticSetCurrentDeviceState(devContext, &(hwnHeader->HwNSettingsInfo[i]), HWN_SETTINGS_SIZE);
 		if (!NT_SUCCESS(status))
 		{
 			goto exit;
@@ -453,7 +453,7 @@ exit:
 }
 
 VOID
-AW8624HapticsBlinkTimerFunc(
+AW869XHapticBlinkTimerFunc(
 	WDFTIMER Timer
 )
 {
@@ -487,7 +487,7 @@ AW8624HapticsBlinkTimerFunc(
 }
 
 NTSTATUS
-AW8624HapticsGetState(
+AW869XHapticGetState(
 	__in PVOID Context,
 	__out_bcount(OutputBufferLength) PVOID OutputBuffer,
 	__in ULONG OutputBufferLength,
@@ -557,7 +557,7 @@ AW8624HapticsGetState(
 			hwnHeader->HwNSettingsInfo[i].HwNId = i;
 
 			// Set other settings values into the buffer here.
-			status = AW8624HapticsGetCurrentDeviceState(devContext, &hwnHeader->HwNSettingsInfo[i], HWN_SETTINGS_SIZE);
+			status = AW869XHapticGetCurrentDeviceState(devContext, &hwnHeader->HwNSettingsInfo[i], HWN_SETTINGS_SIZE);
 			if (!NT_SUCCESS(status))
 			{
 				goto exit;
@@ -590,7 +590,7 @@ AW8624HapticsGetState(
 		for (i = 0; i < NumberOfHwnDevicesInBuffer; i++)
 		{
 			// Set other settings values into the buffer here.
-			status = AW8624HapticsGetCurrentDeviceState(devContext, &hwnHeader->HwNSettingsInfo[i], HWN_SETTINGS_SIZE);
+			status = AW869XHapticGetCurrentDeviceState(devContext, &hwnHeader->HwNSettingsInfo[i], HWN_SETTINGS_SIZE);
 			if (!NT_SUCCESS(status))
 			{
 				goto exit;

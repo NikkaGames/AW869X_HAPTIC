@@ -25,8 +25,8 @@ Environment:
 
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text (INIT, DriverEntry)
-#pragma alloc_text (PAGE, AW8624HapticsEvtDriverUnload)
-#pragma alloc_text (PAGE, AW8624HapticsEvtDriverContextCleanup)
+#pragma alloc_text (PAGE, AW869XHapticEvtDriverUnload)
+#pragma alloc_text (PAGE, AW869XHapticEvtDriverContextCleanup)
 #endif
 
 NTSTATUS
@@ -75,8 +75,8 @@ Return Value:
 	Trace(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC! Entry");
 #endif
 
-	WDF_DRIVER_CONFIG_INIT(&config, AW8624HapticsEvtDeviceAdd);
-	config.EvtDriverUnload = AW8624HapticsEvtDriverUnload;
+	WDF_DRIVER_CONFIG_INIT(&config, AW869XHapticEvtDeviceAdd);
+	config.EvtDriverUnload = AW869XHapticEvtDriverUnload;
 	config.DriverPoolTag = HAPTICS_POOL_TAG;
 
 	//
@@ -84,7 +84,7 @@ Return Value:
 	// the framework driver object is deleted during driver unload.
 	//
 	WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
-	attributes.EvtCleanupCallback = AW8624HapticsEvtDriverContextCleanup;
+	attributes.EvtCleanupCallback = AW869XHapticEvtDriverContextCleanup;
 
 	status = WdfDriverCreate(DriverObject,
 		RegistryPath,
@@ -105,13 +105,13 @@ Return Value:
 	regPacket.Size = sizeof(HWN_CLIENT_REGISTRATION_PACKET);
 	regPacket.DeviceContextSize = sizeof(DEVICE_CONTEXT);
 
-	regPacket.ClientInitializeDevice = AW8624HapticsInitializeDevice;
-	regPacket.ClientUnInitializeDevice = AW8624HapticsUnInitializeDevice;
-	regPacket.ClientQueryDeviceInformation = AW8624HapticsQueryDeviceInformation;
-	regPacket.ClientStartDevice = AW8624HapticsStartDevice;
-	regPacket.ClientStopDevice = AW8624HapticsStopDevice;
-	regPacket.ClientSetHwNState = AW8624HapticsSetState;
-	regPacket.ClientGetHwNState = AW8624HapticsGetState;
+	regPacket.ClientInitializeDevice = AW869XHapticInitializeDevice;
+	regPacket.ClientUnInitializeDevice = AW869XHapticUnInitializeDevice;
+	regPacket.ClientQueryDeviceInformation = AW869XHapticQueryDeviceInformation;
+	regPacket.ClientStartDevice = AW869XHapticStartDevice;
+	regPacket.ClientStopDevice = AW869XHapticStopDevice;
+	regPacket.ClientSetHwNState = AW869XHapticSetState;
+	regPacket.ClientGetHwNState = AW869XHapticGetState;
 
 	status = HwNRegisterClient(
 		Driver,
@@ -135,7 +135,7 @@ Return Value:
 }
 
 NTSTATUS
-AW8624HapticsEvtDeviceAdd(
+AW869XHapticEvtDeviceAdd(
 	_In_    WDFDRIVER       Driver,
 	_Inout_ PWDFDEVICE_INIT DeviceInit
 )
@@ -164,7 +164,7 @@ Return Value:
 	Trace(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC! Entry");
 #endif
 
-	status = AW8624HapticsCreateDevice(Driver, DeviceInit);
+	status = AW869XHapticCreateDevice(Driver, DeviceInit);
 
 #ifdef DEBUG
 	Trace(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC! Exit");
@@ -174,7 +174,7 @@ Return Value:
 }
 
 VOID
-AW8624HapticsEvtDriverContextCleanup(
+AW869XHapticEvtDriverContextCleanup(
 	_In_ WDFOBJECT DriverObject
 )
 /*++
@@ -207,7 +207,7 @@ Return Value:
 }
 
 VOID
-AW8624HapticsEvtDriverUnload(
+AW869XHapticEvtDriverUnload(
 	IN WDFDRIVER Driver
 )
 /*++

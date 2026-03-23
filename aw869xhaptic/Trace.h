@@ -27,7 +27,7 @@ Environment:
 
 #define WPP_CONTROL_GUIDS                                              \
     WPP_DEFINE_CONTROL_GUID(                                           \
-        AW8624HapticsTraceGuid, (71be7006,16a9,45cc,8875,afd24773db3a), \
+        AW869XHapticTraceGuid, (71be7006,16a9,45cc,8875,afd24773db3a), \
                                                                             \
         WPP_DEFINE_BIT(TRACE_INIT)          \
         WPP_DEFINE_BIT(TRACE_REGISTRY)      \

@@ -19,7 +19,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <Inf Include="AW8624Haptics.inf">
+    <Inf Include="aw869xhaptic.inf">
       <Filter>Driver Files</Filter>
     </Inf>
   </ItemGroup>

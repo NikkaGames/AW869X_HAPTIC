@@ -20,25 +20,25 @@ Environment:
 #include "device.h"
 
 NTSTATUS
-AW8624HapticsSetDevice(
+AW869XHapticSetDevice(
 	PDEVICE_CONTEXT devContext,
 	PHWN_SETTINGS hwnSettings
 );
 
 NTSTATUS
-AW8624HapticsInitializeDeviceState(
+AW869XHapticInitializeDeviceState(
 	PDEVICE_CONTEXT devContext
 );
 
 NTSTATUS
-AW8624HapticsGetCurrentDeviceState(
+AW869XHapticGetCurrentDeviceState(
 	PDEVICE_CONTEXT devContext,
 	PHWN_SETTINGS hwnSettings,
 	ULONG hwnSettingsLength
 );
 
 NTSTATUS
-AW8624HapticsSetCurrentDeviceState(
+AW869XHapticSetCurrentDeviceState(
 	PDEVICE_CONTEXT devContext,
 	PHWN_SETTINGS hwnSettings,
 	ULONG hwnSettingsLength

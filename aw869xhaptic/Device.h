@@ -81,7 +81,7 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DEVICE_CONTEXT, DeviceGetContext)
 // Function to initialize the device and its callbacks
 //
 NTSTATUS
-AW8624HapticsCreateDevice(
+AW869XHapticCreateDevice(
 	_Inout_ WDFDRIVER Driver,
 	_Inout_ PWDFDEVICE_INIT DeviceInit
 );

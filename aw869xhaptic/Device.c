@@ -24,7 +24,7 @@ Environment:
 #endif
 
 NTSTATUS
-AW8624HapticsCreateDevice(
+AW869XHapticCreateDevice(
 	_Inout_ WDFDRIVER Driver,
 	_Inout_ PWDFDEVICE_INIT DeviceInit
 )
@@ -112,7 +112,7 @@ Return Value:
 	{
 		devContext->Device = device;
 
-		WDF_TIMER_CONFIG_INIT(&timerConfig, AW8624HapticsBlinkTimerFunc);
+		WDF_TIMER_CONFIG_INIT(&timerConfig, AW869XHapticBlinkTimerFunc);
 		timerConfig.AutomaticSerialization = FALSE;
 
 		WDF_OBJECT_ATTRIBUTES_INIT(&timerAttributes);

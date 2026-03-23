@@ -16,14 +16,16 @@ if "%SDKVER%"=="" (
     echo Windows SDK version not found
     exit /b 1
 )
-set OUTDIR=C:\woa\drivers\AW8624Haptics\HapticNotifyBridge\ARM64\Release
+set SCRIPT_DIR=%~dp0
+if "%SCRIPT_DIR:~-1%"=="\" set SCRIPT_DIR=%SCRIPT_DIR:~0,-1%
+set OUTDIR=%SCRIPT_DIR%\ARM64\Release
 if not exist "%OUTDIR%" mkdir "%OUTDIR%"
 cl /nologo /std:c++17 /EHsc /O2 /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN ^
   /I"%SDKROOT%\Include\%SDKVER%\ucrt" ^
   /I"%SDKROOT%\Include\%SDKVER%\shared" ^
   /I"%SDKROOT%\Include\%SDKVER%\um" ^
-  /Fe:"%OUTDIR%\AW869XNotifySvc.exe" ^
-  C:\woa\drivers\AW8624Haptics\HapticNotifyBridge\HapticNotifyBridge.cpp ^
+  /Fe:"%OUTDIR%\aw869xhapticnotifysvc.exe" ^
+  "%SCRIPT_DIR%\aw869xhapticnotifysvc.cpp" ^
   /link ^
   /LIBPATH:"%SDKROOT%\Lib\%SDKVER%\ucrt\arm64" ^
   /LIBPATH:"%SDKROOT%\Lib\%SDKVER%\um\arm64" ^

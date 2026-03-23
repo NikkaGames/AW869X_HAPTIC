@@ -1,0 +1,67 @@
+;
+; aw869xhaptic.inf
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ManufacturerName%
+CatalogFile = aw869xhaptic.cat
+DriverVer   = 1.0.0
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+NotifySvc_Dir = 11
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+aw869xhaptic.sys = 1,,
+aw869xhapticnotifysvc.exe = 1,,
+
+[Manufacturer]
+%ManufacturerName% = Standard,NT$ARCH$.10.0...16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%aw869xhaptic.DeviceDesc% = aw869xhaptic_Device, ACPI\AWNC8624
+
+[aw869xhaptic_Device.NT]
+CopyFiles = Drivers_Dir, NotifySvc_Dir
+
+[Drivers_Dir]
+aw869xhaptic.sys
+
+[NotifySvc_Dir]
+aw869xhapticnotifysvc.exe
+
+[aw869xhaptic_Device.NT.Services]
+AddService = aw869xhaptic, %SPSVCINST_ASSOCSERVICE%, aw869xhaptic_Service_Inst
+AddService = aw869xhapticnotifysvc, 0x00000000, aw869xhapticnotifysvc_Service_Inst
+
+[aw869xhaptic_Service_Inst]
+DisplayName    = %aw869xhaptic.SVCDESC%
+ServiceType    = 1
+StartType      = 3
+ErrorControl   = 1
+ServiceBinary  = %13%\aw869xhaptic.sys
+
+[aw869xhapticnotifysvc_Service_Inst]
+DisplayName    = %aw869xhapticnotifysvc.SVCDESC%
+ServiceType    = 0x10
+StartType      = 2
+ErrorControl   = 1
+ServiceBinary  = %11%\aw869xhapticnotifysvc.exe
+StartName      = "LocalSystem"
+Dependencies   = EventLog
+
+[Strings]
+SPSVCINST_ASSOCSERVICE      = 0x00000002
+
+ManufacturerName            = "Nikka"
+DiskName                    = "AW869X Haptic Installation Disk"
+aw869xhaptic.DeviceDesc     = "AW869X Haptic Device"
+aw869xhaptic.SVCDESC        = "AW869X Haptic Device"
+aw869xhapticnotifysvc.SVCDESC = "AW869X Haptic Notification Service"

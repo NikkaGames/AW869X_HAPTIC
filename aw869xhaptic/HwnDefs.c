@@ -26,7 +26,7 @@ Environment:
 #define AW869X_DEFAULT_ON_PULSE_MS 222
 
 static VOID
-AW8624HapticsSleepMs(
+AW869XHapticSleepMs(
 	ULONG Milliseconds
 )
 {
@@ -37,7 +37,7 @@ AW8624HapticsSleepMs(
 }
 
 NTSTATUS
-AW8624HapticsToggleVibrationMotor(
+AW869XHapticToggleVibrationMotor(
 	PDEVICE_CONTEXT devContext,
 	PHWN_SETTINGS hwnSettings
 )
@@ -84,7 +84,7 @@ AW8624HapticsToggleVibrationMotor(
 		if (NT_SUCCESS(status))
 		{
 			pulseMs = AW869X_DEFAULT_ON_PULSE_MS;
-			AW8624HapticsSleepMs(pulseMs);
+			AW869XHapticSleepMs(pulseMs);
 			status = AW8624Stop(devContext);
 		}
 		break;
@@ -161,7 +161,7 @@ AW8624HapticsToggleVibrationMotor(
 }
 
 NTSTATUS
-AW8624HapticsSetDevice(
+AW869XHapticSetDevice(
 	PDEVICE_CONTEXT devContext,
 	PHWN_SETTINGS hwnSettings
 )
@@ -185,7 +185,7 @@ AW8624HapticsSetDevice(
 
 	for (i = 0; i < devContext->NumberOfHapticsDevices; i++)
 	{
-		Status = AW8624HapticsToggleVibrationMotor(
+		Status = AW869XHapticToggleVibrationMotor(
 			devContext,
 			hwnSettings
 		);
@@ -195,7 +195,7 @@ AW8624HapticsSetDevice(
 }
 
 NTSTATUS
-AW8624HapticsInitializeDeviceState(
+AW869XHapticInitializeDeviceState(
 	PDEVICE_CONTEXT devContext
 )
 {
@@ -243,7 +243,7 @@ AW8624HapticsInitializeDeviceState(
 }
 
 NTSTATUS
-AW8624HapticsGetCurrentDeviceState(
+AW869XHapticGetCurrentDeviceState(
 	PDEVICE_CONTEXT devContext,
 	PHWN_SETTINGS hwnSettings,
 	ULONG hwnSettingsLength
@@ -264,7 +264,7 @@ AW8624HapticsGetCurrentDeviceState(
 
 	if (!currentState)
 	{
-		Status = AW8624HapticsInitializeDeviceState(devContext);
+		Status = AW869XHapticInitializeDeviceState(devContext);
 		if (!NT_SUCCESS(Status))
 		{
 			return Status;
@@ -300,7 +300,7 @@ AW8624HapticsGetCurrentDeviceState(
 }
 
 NTSTATUS
-AW8624HapticsSetCurrentDeviceState(
+AW869XHapticSetCurrentDeviceState(
 	PDEVICE_CONTEXT devContext,
 	PHWN_SETTINGS hwnSettings,
 	ULONG hwnSettingsLength

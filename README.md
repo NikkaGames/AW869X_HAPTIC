@@ -1,7 +1,7 @@
-# AW8624 driver for the AW8624 haptics controller
+# aw869xhaptic
 
-This is a driver for the AW8624 haptics controller found in several Xiaomi devices.
+Windows ARM64 HWNCLX haptic driver package for the Awinic `haptic_hv_l` / AW869X-class device used on NX729J-class hardware.
 
-This driver implements the bare minimum for Xiaomi 11 Lite 5G NE, other devices might need several changes to the code.
-
-The driver is based on https://github.com/WOA-Project/windows_hardware_haptics_da7280_src.
+Repo layout:
+- `aw869xhaptic/`: kernel-mode haptic driver
+- `aw869xhapticnotifysvc/`: companion notification service

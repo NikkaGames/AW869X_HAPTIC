@@ -52,7 +52,7 @@
     <ClInclude Include="Trace.h" />
   </ItemGroup>
   <ItemGroup>
-    <Inf Include="AW8624Haptics.inf" />
+    <Inf Include="aw869xhaptic.inf" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{132601BF-5D53-4C57-96BE-BEFD5455B6C7}</ProjectGuid>
@@ -61,9 +61,9 @@
     <MinimumVisualStudioVersion>12.0</MinimumVisualStudioVersion>
     <Configuration>Debug</Configuration>
     <Platform Condition="'$(Platform)' == ''">Win32</Platform>
-    <RootNamespace>AW869XHaptics</RootNamespace>
-    <ProjectName>AW869XHaptics</ProjectName>
-    <TargetName>AW869XHaptics</TargetName>
+    <RootNamespace>aw869xhaptic</RootNamespace>
+    <ProjectName>aw869xhaptic</ProjectName>
+    <TargetName>aw869xhaptic</TargetName>
     <WindowsTargetPlatformVersion>$(LatestTargetPlatformVersion)</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -159,13 +159,14 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
     <DebuggerFlavor>DbgengKernelDebugger</DebuggerFlavor>
-    <IntDir>$(Platform)\$(ConfigurationName)\</IntDir>
+    <IntDir>$(Platform)\$(ConfigurationName)\$(ProjectName)\</IntDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
     <DebuggerFlavor>DbgengKernelDebugger</DebuggerFlavor>
+    <IntDir>$(Platform)\$(ConfigurationName)\$(ProjectName)\</IntDir>
     <Inf2CatUseLocalTime>true</Inf2CatUseLocalTime>
-    <AwNotifyServiceBuildScript>$(SolutionDir)HapticNotifyBridge\build_arm64.cmd</AwNotifyServiceBuildScript>
-    <AwNotifyServiceSource>$(SolutionDir)HapticNotifyBridge\ARM64\Release\AW869XNotifySvc.exe</AwNotifyServiceSource>
+    <AwNotifyServiceBuildScript>$(SolutionDir)aw869xhapticnotifysvc\build_arm64.cmd</AwNotifyServiceBuildScript>
+    <AwNotifyServiceSource>$(SolutionDir)aw869xhapticnotifysvc\ARM64\Release\aw869xhapticnotifysvc.exe</AwNotifyServiceSource>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
