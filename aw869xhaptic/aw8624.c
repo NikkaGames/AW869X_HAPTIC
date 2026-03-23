@@ -930,7 +930,7 @@ AW8624PlayPulse(
 
     if (DevContext->Family == AwHapticFamily8692x &&
         DurationMs != 0 &&
-        DurationMs < DevContext->Settings.DurationTime[2]) {
+        DurationMs <= 50) {
         return Aw8692xPlayClicky(DevContext, Intensity, DurationMs);
     }
 
