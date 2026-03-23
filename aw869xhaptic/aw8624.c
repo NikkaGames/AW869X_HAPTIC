@@ -145,14 +145,14 @@ static UCHAR AwScaleWithinLimit(UCHAR BaseValue, UCHAR Limit, ULONG Percent)
     if (Percent == 0) {
         return 0;
     }
-    if (Percent > 200) {
-        Percent = 200;
+    if (Percent > 100) {
+        Percent = 100;
     }
     if (Limit == 0 || Limit <= BaseValue) {
         return BaseValue;
     }
 
-    Scaled = (ULONG)BaseValue + ((((ULONG)Limit - (ULONG)BaseValue) * Percent) / 200);
+    Scaled = (ULONG)BaseValue + ((((ULONG)Limit - (ULONG)BaseValue) * Percent) / 100);
     if (Scaled > Limit) {
         Scaled = Limit;
     }

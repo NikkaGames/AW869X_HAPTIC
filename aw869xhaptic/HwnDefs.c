@@ -50,6 +50,7 @@ AW869XHapticToggleVibrationMotor(
 	ULONG pulseMs = 0;
 	ULONG requestedPulseMs = 0;
 	HWN_STATE hwnState;
+	BOOLEAN aw8692xClicky = FALSE;
 
 #ifdef DEBUG
 	Trace(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC! Entry");
@@ -111,7 +112,10 @@ AW869XHapticToggleVibrationMotor(
 
 		requestedPulseMs = (periodMs * dutyCycle * cycleCount) / 100;
 		pulseMs = requestedPulseMs;
-		if (pulseMs < 20)
+		aw8692xClicky = (devContext->Family == AwHapticFamily8692x &&
+			requestedPulseMs != 0 &&
+			requestedPulseMs <= 50);
+		if (pulseMs < 20 && !aw8692xClicky)
 		{
 			pulseMs = 20;
 		}
@@ -124,7 +128,7 @@ AW869XHapticToggleVibrationMotor(
 			devContext,
 			intensity,
 			(requestedPulseMs != 0) ? requestedPulseMs : pulseMs);
-		if (NT_SUCCESS(status))
+		if (NT_SUCCESS(status) && !aw8692xClicky)
 		{
 			AW869XHapticSleepMs(pulseMs);
 			status = AW8624Stop(devContext);
