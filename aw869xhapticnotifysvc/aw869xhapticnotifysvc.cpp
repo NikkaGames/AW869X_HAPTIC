@@ -43,6 +43,16 @@ constexpr DWORD kVolumeDebounceMs = 50;
 constexpr ULONG kPowerIntensity = 50;
 constexpr DWORD kPowerPulseOnMs = 11;
 constexpr DWORD kPowerPulseGapMs = 60;
+constexpr ULONG kScreenshotIntensity = 50;
+constexpr DWORD kScreenshotPulseOnMs = 11;
+constexpr DWORD kScreenshotDebounceMs = 200;
+constexpr ULONG kClipboardIntensity = 50;
+constexpr DWORD kClipboardPulseOnMs = 11;
+constexpr DWORD kClipboardDebounceMs = 150;
+constexpr DWORD kClipboardIntentWindowMs = 1500;
+constexpr ULONG kSessionIntensity = 50;
+constexpr DWORD kSessionPulseOnMs = 11;
+constexpr DWORD kSessionDebounceMs = 400;
 constexpr LONGLONG kMaxLogSizeBytes = 300 * 1024;
 constexpr ULONGLONG kWnfShelToastPublished = 0x0D83063EA3BD0035ull;
 constexpr wchar_t kPowerWindowClassName[] = L"aw869xhapticnotifysvc_power_window";
@@ -63,9 +73,14 @@ DWORD g_keyboardThreadId = 0;
 HHOOK g_keyboardHook = nullptr;
 volatile ULONGLONG g_lastTypingPulseTick = 0;
 volatile ULONGLONG g_lastVolumePulseTick = 0;
+volatile ULONGLONG g_lastScreenshotPulseTick = 0;
+volatile ULONGLONG g_lastClipboardPulseTick = 0;
+volatile ULONGLONG g_lastClipboardIntentTick = 0;
+volatile ULONGLONG g_lastSessionPulseTick = 0;
 DWORD g_lastAcDcState = DWORD_MAX;
 HWND g_powerWindow = nullptr;
 HPOWERNOTIFY g_acDcPowerNotify = nullptr;
+BOOL g_clipboardListenerAdded = FALSE;
 HANDLE g_volumeThread = nullptr;
 IMMDeviceEnumerator* g_deviceEnumerator = nullptr;
 IMMDevice* g_audioEndpoint = nullptr;
@@ -457,6 +472,42 @@ bool SendDoubleClickyPulse(ULONG intensity, DWORD durationMs, DWORD gapMs)
     return ok;
 }
 
+bool TryTriggerActionPulse(
+    volatile ULONGLONG* lastTick,
+    DWORD debounceMs,
+    const wchar_t* source,
+    ULONG intensity,
+    DWORD pulseMs)
+{
+    const ULONGLONG now = GetTickCount64();
+    ULONGLONG last;
+    ULONGLONG delta;
+
+    for (;;) {
+        last = (ULONGLONG)InterlockedCompareExchange64((volatile LONG64*)lastTick, 0, 0);
+        delta = now - last;
+
+        if (delta < debounceMs) {
+            Log(L"haptic-bridge: suppressed %s pulse deltaMs=%llu thresholdMs=%lu",
+                source,
+                delta,
+                debounceMs);
+            return false;
+        }
+
+        if ((ULONGLONG)InterlockedCompareExchange64((volatile LONG64*)lastTick, (LONG64)now, (LONG64)last) == last) {
+            break;
+        }
+    }
+
+    Log(L"haptic-bridge: accepted %s pulse deltaMs=%llu intensity=%lu pulseMs=%lu",
+        source,
+        delta,
+        intensity,
+        pulseMs);
+    return SendClickyPulse(intensity, pulseMs);
+}
+
 bool TriggerNotificationPulse()
 {
     if (!SendHwnState(HWN_ON, kNotificationIntensity)) {
@@ -561,6 +612,53 @@ bool TryTriggerVolumePulse(float volume, BOOL muted)
     return SendClickyPulse(kVolumeIntensity, kVolumePulseOnMs);
 }
 
+bool TryTriggerScreenshotPulse(const wchar_t* source)
+{
+    return TryTriggerActionPulse(
+        &g_lastScreenshotPulseTick,
+        kScreenshotDebounceMs,
+        source,
+        kScreenshotIntensity,
+        kScreenshotPulseOnMs);
+}
+
+bool TryTriggerClipboardPulse()
+{
+    const ULONGLONG now = GetTickCount64();
+    const ULONGLONG lastIntent = (ULONGLONG)InterlockedCompareExchange64((volatile LONG64*)&g_lastClipboardIntentTick, 0, 0);
+    const ULONGLONG lastScreenshot = (ULONGLONG)InterlockedCompareExchange64((volatile LONG64*)&g_lastScreenshotPulseTick, 0, 0);
+
+    if ((now - lastIntent) > kClipboardIntentWindowMs) {
+        Log(L"haptic-bridge: suppressed clipboard pulse no recent intent deltaMs=%llu thresholdMs=%lu",
+            now - lastIntent,
+            kClipboardIntentWindowMs);
+        return false;
+    }
+
+    if ((now - lastScreenshot) < kClipboardIntentWindowMs) {
+        Log(L"haptic-bridge: suppressed clipboard pulse due to recent screenshot deltaMs=%llu",
+            now - lastScreenshot);
+        return false;
+    }
+
+    return TryTriggerActionPulse(
+        &g_lastClipboardPulseTick,
+        kClipboardDebounceMs,
+        L"clipboard",
+        kClipboardIntensity,
+        kClipboardPulseOnMs);
+}
+
+bool TryTriggerSessionPulse(const wchar_t* source)
+{
+    return TryTriggerActionPulse(
+        &g_lastSessionPulseTick,
+        kSessionDebounceMs,
+        source,
+        kSessionIntensity,
+        kSessionPulseOnMs);
+}
+
 bool TryTriggerNotificationPulse(const wchar_t* source)
 {
     const ULONGLONG now = GetTickCount64();
@@ -600,6 +698,36 @@ LRESULT CALLBACK KeyboardHookProc(int code, WPARAM wParam, LPARAM lParam)
         (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) &&
         lParam != 0) {
         const KBDLLHOOKSTRUCT* keyboard = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lParam);
+        const bool shiftDown =
+            (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0 ||
+            (GetAsyncKeyState(VK_LSHIFT) & 0x8000) != 0 ||
+            (GetAsyncKeyState(VK_RSHIFT) & 0x8000) != 0;
+        const bool ctrlDown =
+            (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0 ||
+            (GetAsyncKeyState(VK_LCONTROL) & 0x8000) != 0 ||
+            (GetAsyncKeyState(VK_RCONTROL) & 0x8000) != 0;
+        const bool winDown =
+            (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 ||
+            (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
+
+        if (keyboard->vkCode == VK_SNAPSHOT) {
+            TryTriggerScreenshotPulse(L"screenshot");
+            return CallNextHookEx(g_keyboardHook, code, wParam, lParam);
+        }
+
+        if ((keyboard->vkCode == 'S' || keyboard->vkCode == 's') && shiftDown && winDown) {
+            TryTriggerScreenshotPulse(L"snipping");
+            return CallNextHookEx(g_keyboardHook, code, wParam, lParam);
+        }
+
+        if ((keyboard->vkCode == 'C' || keyboard->vkCode == 'X') && ctrlDown) {
+            InterlockedExchange64((volatile LONG64*)&g_lastClipboardIntentTick, (LONG64)GetTickCount64());
+            Log(L"haptic-bridge: clipboard intent armed vk=%lu", keyboard->vkCode);
+        } else if (keyboard->vkCode == VK_INSERT && ctrlDown) {
+            InterlockedExchange64((volatile LONG64*)&g_lastClipboardIntentTick, (LONG64)GetTickCount64());
+            Log(L"haptic-bridge: clipboard intent armed vk=%lu", keyboard->vkCode);
+        }
+
         TryTriggerTypingPulse(keyboard->vkCode);
     }
 
@@ -629,6 +757,24 @@ LRESULT CALLBACK PowerWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
             }
         }
         return TRUE;
+    }
+
+    if (message == WM_WTSSESSION_CHANGE) {
+        if (wParam == WTS_SESSION_LOCK) {
+            Log(L"haptic-bridge: session lock");
+            TryTriggerSessionPulse(L"lock");
+            return TRUE;
+        }
+        if (wParam == WTS_SESSION_UNLOCK) {
+            Log(L"haptic-bridge: session unlock");
+            TryTriggerSessionPulse(L"unlock");
+            return TRUE;
+        }
+    }
+
+    if (message == WM_CLIPBOARDUPDATE) {
+        TryTriggerClipboardPulse();
+        return 0;
     }
 
     return DefWindowProcW(hwnd, message, wParam, lParam);
@@ -663,13 +809,16 @@ DWORD WINAPI KeyboardHookThreadProc(LPVOID)
             g_powerWindow,
             &GUID_ACDC_POWER_SOURCE,
             DEVICE_NOTIFY_WINDOW_HANDLE);
+        WTSRegisterSessionNotification(g_powerWindow, NOTIFY_FOR_THIS_SESSION);
+        g_clipboardListenerAdded = AddClipboardFormatListener(g_powerWindow);
         if (GetSystemPowerStatus(&powerStatus)) {
             g_lastAcDcState = powerStatus.ACLineStatus;
             Log(L"haptic-bridge: seeded power source state=%lu", g_lastAcDcState);
         }
-        Log(L"haptic-bridge: power notification window ready hwnd=%p notify=%p",
+        Log(L"haptic-bridge: worker window ready hwnd=%p notify=%p clipboard=%u",
             g_powerWindow,
-            g_acDcPowerNotify);
+            g_acDcPowerNotify,
+            g_clipboardListenerAdded ? 1U : 0U);
     } else {
         Log(L"haptic-bridge: CreateWindowEx for power notifications failed error=%lu", GetLastError());
     }
@@ -711,6 +860,13 @@ exit:
     if (g_acDcPowerNotify != nullptr) {
         UnregisterPowerSettingNotification(g_acDcPowerNotify);
         g_acDcPowerNotify = nullptr;
+    }
+    if (g_powerWindow != nullptr) {
+        if (g_clipboardListenerAdded) {
+            RemoveClipboardFormatListener(g_powerWindow);
+            g_clipboardListenerAdded = FALSE;
+        }
+        WTSUnRegisterSessionNotification(g_powerWindow);
     }
     if (g_powerWindow != nullptr) {
         DestroyWindow(g_powerWindow);
