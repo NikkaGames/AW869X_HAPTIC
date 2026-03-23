@@ -48,6 +48,7 @@ AW869XHapticToggleVibrationMotor(
 	ULONG dutyCycle = 0;
 	ULONG cycleCount = 0;
 	ULONG pulseMs = 0;
+	ULONG requestedPulseMs = 0;
 	HWN_STATE hwnState;
 
 #ifdef DEBUG
@@ -108,7 +109,8 @@ AW869XHapticToggleVibrationMotor(
 			cycleCount = 1;
 		}
 
-		pulseMs = (periodMs * dutyCycle * cycleCount) / 100;
+		requestedPulseMs = (periodMs * dutyCycle * cycleCount) / 100;
+		pulseMs = requestedPulseMs;
 		if (pulseMs < 20)
 		{
 			pulseMs = 20;
@@ -118,7 +120,10 @@ AW869XHapticToggleVibrationMotor(
 			pulseMs = 5000;
 		}
 
-		status = AW8624PlayPulse(devContext, intensity, pulseMs);
+		status = AW8624PlayPulse(
+			devContext,
+			intensity,
+			(requestedPulseMs != 0) ? requestedPulseMs : pulseMs);
 		if (NT_SUCCESS(status))
 		{
 			AW869XHapticSleepMs(pulseMs);
@@ -143,7 +148,7 @@ AW869XHapticToggleVibrationMotor(
 		periodMs,
 		dutyCycle,
 		cycleCount,
-		pulseMs,
+		(requestedPulseMs != 0) ? requestedPulseMs : pulseMs,
 		status);
 #endif
 
