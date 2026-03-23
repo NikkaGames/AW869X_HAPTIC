@@ -423,8 +423,13 @@ static NTSTATUS Aw8692xMiscInit(PDEVICE_CONTEXT DevContext)
 {
     NTSTATUS Status;
     const AW_HAPTIC_SETTINGS* S = &DevContext->Settings;
+    UCHAR RegValue;
 
     Status = Aw8692xSetBstVol(DevContext, S->BstVolDefault);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8692X_REG_SYSCTRL4,
+        (UCHAR)AW8692X_BIT_SYSCTRL4_GAIN_MODE_MASK_LN,
+        AW8692X_BIT_SYSCTRL4_GAIN_ENABLE_LN);
     if (!NT_SUCCESS(Status)) return Status;
     Status = AwWriteBits(DevContext, AW8692X_REG_CONTCFG1,
         (UCHAR)AW8692X_BIT_CONTCFG1_BRK_BST_MD_MASK, (UCHAR)(S->BrkBstMd << 6));
@@ -441,6 +446,30 @@ static NTSTATUS Aw8692xMiscInit(PDEVICE_CONTEXT DevContext)
     if (!NT_SUCCESS(Status)) return Status;
     Status = AwWriteBits(DevContext, AW8692X_REG_DETCFG2,
         (UCHAR)AW8692X_BIT_DETCFG2_D2S_GAIN_MASK, S->D2sGain);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteByte(DevContext, AW8692X_REG_SYSCTRL5, 0x5A);
+    if (!NT_SUCCESS(Status)) return Status;
+    RegValue = AW8692X_BIT_TMCFG_TM_UNLOCK;
+    Status = AwWriteByte(DevContext, AW8692X_REG_TMCFG, RegValue);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8692X_REG_ANACFG13,
+        (UCHAR)AW8692X_BIT_ANACFG13_BST_PC_MASK,
+        AW8692X_BIT_ANACFG13_BST_PEAKCUR_4A);
+    if (!NT_SUCCESS(Status)) return Status;
+    RegValue = AW8692X_BIT_TMCFG_TM_LOCK;
+    Status = AwWriteByte(DevContext, AW8692X_REG_TMCFG, RegValue);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8692X_REG_ANACFG12,
+        (UCHAR)AW8692X_BIT_ANACFG12_BST_SKIP_MASK,
+        AW8692X_BIT_ANACFG12_BST_SKIP_SHUTDOWN);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8692X_REG_ANACFG15,
+        (UCHAR)AW8692X_BIT_ANACFG15_BST_PEAK_MODE_MASK,
+        AW8692X_BIT_ANACFG15_BST_PEAK_BACK);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = AwWriteBits(DevContext, AW8692X_REG_ANACFG16,
+        (UCHAR)AW8692X_BIT_ANACFG16_BST_SRC_MASK,
+        AW8692X_BIT_ANACFG16_BST_SRC_3NS);
     return Status;
 }
 
