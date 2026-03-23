@@ -33,6 +33,7 @@ constexpr wchar_t kServiceDisplayName[] = L"AW869X Haptic Notification Service";
 constexpr DWORD kNotificationDebounceMs = 750;
 constexpr DWORD kSubscriptionRetryMs = 5000;
 constexpr ULONG kNotificationIntensity = 50;
+constexpr DWORD kNotificationLeadDelayMs = 200;
 constexpr DWORD kPulseOnMs = 150;
 constexpr ULONG kTypingIntensity = 50;
 constexpr DWORD kTypingPulseOnMs = 11;
@@ -510,10 +511,12 @@ bool TryTriggerActionPulse(
 
 bool TriggerNotificationPulse()
 {
+    SleepMs(kNotificationLeadDelayMs);
     if (!SendHwnState(HWN_ON, kNotificationIntensity)) {
         return false;
     }
-    Log(L"haptic-bridge: notification pulse sent driverManagedOnMs=%lu intensity=%lu",
+    Log(L"haptic-bridge: notification pulse sent leadDelayMs=%lu driverManagedOnMs=%lu intensity=%lu",
+        (ULONG)kNotificationLeadDelayMs,
         (ULONG)kPulseOnMs,
         kNotificationIntensity);
     return true;
