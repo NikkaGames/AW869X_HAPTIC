@@ -138,6 +138,32 @@ static UCHAR AwScaleNonZeroU8(UCHAR BaseValue, ULONG Percent)
     return Scaled;
 }
 
+static UCHAR AwScaleWithinLimit(UCHAR BaseValue, UCHAR Limit, ULONG Percent)
+{
+    ULONG Scaled;
+
+    if (BaseValue == 0) {
+        return 0;
+    }
+
+    if (Percent < 100) {
+        Percent = 100;
+    }
+
+    Scaled = ((ULONG)BaseValue * Percent) / 100;
+    if (Scaled < BaseValue) {
+        Scaled = BaseValue;
+    }
+    if (Limit != 0 && Scaled > Limit) {
+        Scaled = Limit;
+    }
+    if (Scaled > 0xFF) {
+        Scaled = 0xFF;
+    }
+
+    return (UCHAR)Scaled;
+}
+
 static VOID AwLoadNx729jLeftSettings(PDEVICE_CONTEXT DevContext)
 {
     RtlZeroMemory(&DevContext->Settings, sizeof(DevContext->Settings));
@@ -404,7 +430,7 @@ static NTSTATUS Aw8692xSetWavLoop(PDEVICE_CONTEXT DevContext, UCHAR Wave, UCHAR 
 
 static VOID Aw8692xSelectRamWaveform(PDEVICE_CONTEXT DevContext, ULONG DurationMs, UCHAR* WaveSeq, UCHAR* WaveLoop)
 {
-    if (DurationMs < DevContext->Settings.DurationTime[0]) {
+    if (DurationMs <= DevContext->Settings.DurationTime[0]) {
         *WaveSeq = 3;
         *WaveLoop = 0;
     } else if (DurationMs < DevContext->Settings.DurationTime[1]) {
@@ -694,8 +720,9 @@ static NTSTATUS Aw8692xPlayContinuous(PDEVICE_CONTEXT DevContext, ULONG Intensit
 static NTSTATUS Aw8692xPlayClicky(PDEVICE_CONTEXT DevContext, ULONG Intensity, ULONG DurationMs)
 {
     NTSTATUS Status;
-    UCHAR Gain = AwScaleU8(AW_GAIN_MAX, Intensity);
-    UCHAR BstVol = DevContext->Settings.BstVolRam != 0 ? DevContext->Settings.BstVolRam : DevContext->Settings.BstVolDefault;
+    UCHAR BaseBstVol = DevContext->Settings.BstVolRam != 0 ? DevContext->Settings.BstVolRam : DevContext->Settings.BstVolDefault;
+    UCHAR Gain = AwScaleWithinLimit(AW_GAIN_MAX, 0xFF, Intensity);
+    UCHAR BstVol = AwScaleWithinLimit(BaseBstVol, DevContext->Settings.MaxBstVol, Intensity);
     UCHAR WaveSeq = 0;
     UCHAR WaveLoop = 0;
 
